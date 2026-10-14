@@ -16,9 +16,10 @@ const DENDRITE_WAVINESS = 0.45;
 const DENDRITE_BASE = 0.3; // base radius, in soma radii
 const DENDRITE_TIP = 0.025; // tip radius, in soma radii
 const BRANCH_CHANCE = 0.75;
-const TUBE_SEGMENTS = 28;
-const TUBE_SIDES = 5;
-const SOMA_DETAIL = 4;
+// Geometry detail, kept modest: hundreds of neurons share the GPU.
+const TUBE_SEGMENTS = 16;
+const TUBE_SIDES = 4;
+const SOMA_DETAIL = 3;
 const SOMA_ROUGHNESS = 0.14;
 
 export interface NeuronGeometry {

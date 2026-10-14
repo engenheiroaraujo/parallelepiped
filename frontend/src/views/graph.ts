@@ -13,7 +13,6 @@
 import ForceGraph3D, { type ConfigOptions, type ForceGraph3DInstance, type LinkObject, type NodeObject } from '3d-force-graph';
 import SpriteText from 'three-spritetext';
 import {
-  ACESFilmicToneMapping,
   AdditiveBlending,
   AmbientLight,
   type BufferGeometry,
@@ -39,7 +38,7 @@ type Link = LinkObject<Node>;
 // The default export is not generic over node/link types; narrow it once here.
 const Graph3D = ForceGraph3D as unknown as new (element: HTMLElement, config?: ConfigOptions) => ForceGraph3DInstance<Node, Link>;
 
-// Folder colours (the same scheme as before), one per top-level folder.
+// One colour per folder that directly contains the note.
 const palette = ['#a855f7', '#ef4444', '#f97316', '#eab308', '#10b981', '#3b82f6', '#ec4899', '#14b8a6', '#84cc16', '#f43f5e'];
 const rootColor = '#a1a1aa';
 const unresolvedColor = '#52525b';
@@ -52,29 +51,35 @@ const background = '#1e1e1e';
 const SOMA_BASE_RADIUS = 1.2;
 const SOMA_DEGREE_RADIUS = 0.9;
 const SOMA_MAX_RADIUS = 12;
-const SOMA_GLOW = 0.35; // emissive intensity of the cell body
+const SOMA_GLOW = 0.5; // emissive intensity of the cell body
 const DENDRITE_SHADE = 0.55; // how far dendrites darken towards DENDRITE_TINT
 const DENDRITE_TINT = new Color('#2a201c');
 const CORE_SCALE = 2.4; // inner glow diameter, in soma radii
-const CORE_OPACITY = 0.3;
+const CORE_OPACITY = 0.38;
 
 // Fibres between neurons.
 const FIBRE_SHADE = 0.45;
 const FIBRE_OPACITY = 0.6;
 const FIBRE_WIDTH = 0.22;
 const FIBRE_CURVATURE = 0.2;
-const PULSES_PER_FIBRE = 1;
+// Pulses run only on the fibres of the hovered neuron: constant pulses on
+// every fibre kept the GPU busy redrawing an otherwise still scene.
+const PULSES_PER_FIBRE = 2;
 const PULSE_SPEED = 0.004;
 const PULSE_WIDTH = 0.55;
 
-// Exponential fog density; distant neurons fade into the background.
-const FOG_DENSITY = 0.0028;
+// Exponential fog: distant neurons fade into the background. The density is
+// FOG_SCALE divided by the graph's radius, so a large vault (seen from far
+// away) is not swallowed by fog while a small one still shows depth.
+const FOG_SCALE = 0.18;
+const FOG_DEFAULT_DENSITY = 0.002;
 
 // Labels: dim enough to stay under the bloom threshold.
 const LABEL_COLOR = '#9a9aa4';
 const LABEL_HEIGHT = 2.4;
-// Label texture resolution in px; higher means sharper text when zoomed in.
-const LABEL_FONT_PX = 160;
+// Label texture resolution in px: sharp at normal zoom without the memory of
+// very large textures (one per note).
+const LABEL_FONT_PX = 72;
 
 const WARMUP_TICKS = 120;
 const COOLDOWN_MS = 3000;
@@ -82,9 +87,14 @@ const COOLDOWN_MS = 3000;
 // and run the warm-up ticks.
 const FIRST_FIT_DELAY_MS = 300;
 
-// Render at twice the screen density (capped) so fibres and text stay crisp.
-const SUPERSAMPLE = 2;
-const MAX_PIXEL_RATIO = 3;
+// Render at the screen's own density (capped): antialiasing keeps edges
+// smooth, and supersampling multiplied the GPU work by four.
+const MAX_PIXEL_RATIO = 2;
+
+// On-demand rendering: the scene is redrawn while the layout settles, the
+// camera moves or the user interacts, and paused after this much quiet. Any
+// camera animation must finish within it.
+const IDLE_PAUSE_MS = 1500;
 
 const BLOOM = { strength: 0.5, radius: 0.45, threshold: 0.6 };
 
@@ -106,6 +116,9 @@ export class GraphView {
   private hovered: string | null = null;
   private pendingData: GraphData | null = null;
   private needsFit = false;
+  private engineRunning = false;
+  private paused = false;
+  private idleTimer = 0;
 
   constructor(
     private readonly container: HTMLElement,
@@ -144,7 +157,7 @@ export class GraphView {
       .linkWidth((l) => (this.isLinkHighlighted(l) ? FIBRE_WIDTH * 2.2 : FIBRE_WIDTH))
       .linkResolution(6)
       // Pulses: faint signals running from source to target.
-      .linkDirectionalParticles(PULSES_PER_FIBRE)
+      .linkDirectionalParticles((l) => (this.isLinkHighlighted(l) ? PULSES_PER_FIBRE : 0))
       .linkDirectionalParticleSpeed(PULSE_SPEED)
       .linkDirectionalParticleWidth((l) => (this.isLinkHighlighted(l) ? PULSE_WIDTH * 1.8 : PULSE_WIDTH))
       .linkDirectionalParticleColor((l) => this.nodeColor(this.nodesById.get(idOf(l.source) ?? '')))
@@ -155,14 +168,17 @@ export class GraphView {
       // already spread out even if animation frames are throttled.
       .warmupTicks(WARMUP_TICKS)
       .cooldownTime(COOLDOWN_MS)
-      .onEngineStop(() => this.fit());
+      .onEngineStop(() => {
+        this.engineRunning = false;
+        this.fit();
+      });
 
     graph.lights(createLights());
 
     const renderer = graph.renderer();
-    const pixelRatio = Math.min(window.devicePixelRatio * SUPERSAMPLE, MAX_PIXEL_RATIO);
+    const pixelRatio = Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO);
     renderer.setPixelRatio(pixelRatio);
-    renderer.toneMapping = ACESFilmicToneMapping;
+    // No tone mapping: ACES darkened the background below #1e1e1e.
 
     const composer = graph.postProcessingComposer();
     composer.setPixelRatio(pixelRatio);
@@ -174,7 +190,7 @@ export class GraphView {
         BLOOM.threshold,
       ),
     );
-    // Applies tone mapping and sRGB conversion after the bloom pass.
+    // Applies the sRGB conversion after the bloom pass.
     composer.addPass(new OutputPass());
 
     // With post-processing the clear colour is treated as linear and then
@@ -182,16 +198,60 @@ export class GraphView {
     // A scene background goes through colour management and stays exact.
     const scene = graph.scene();
     scene.background = new Color(background);
-    scene.fog = new FogExp2(background, FOG_DENSITY);
+    scene.fog = new FogExp2(background, FOG_DEFAULT_DENSITY);
 
-    this.graph = graph;
+    // Any interaction wakes the render loop; it pauses again once idle.
+    for (const event of ['pointerdown', 'pointermove', 'wheel', 'touchstart']) {
+      this.container.addEventListener(event, () => this.wake(), { passive: true });
+    }
+
+    this.graph = graph;  }
+
+  /** Stops all rendering while the graph is not on screen. */
+  hide(): void {
+    window.clearTimeout(this.idleTimer);
+    if (this.graph && !this.paused) {
+      this.graph.pauseAnimation();
+      this.paused = true;
+    }
+  }
+
+  /** Resumes rendering and schedules a pause after IDLE_PAUSE_MS of quiet. */
+  private wake(): void {
+    if (!this.graph || !this.isVisible()) return;
+    if (this.paused) {
+      this.graph.resumeAnimation();
+      this.paused = false;
+    }
+    window.clearTimeout(this.idleTimer);
+    this.idleTimer = window.setTimeout(() => this.sleep(), IDLE_PAUSE_MS);
+  }
+
+  private sleep(): void {
+    // Keep drawing while the layout moves or pulses run on a hovered neuron.
+    if (this.engineRunning || this.hovered !== null) {
+      this.wake();
+      return;
+    }
+    this.hide();
   }
 
   /** Frames every node once the layout has settled after new data. */
   private fit(): void {
     if (!this.needsFit || !this.graph) return;
     this.needsFit = false;
+    this.wake();
+    this.fitFog();
     this.graph.zoomToFit(600, 40);
+  }
+
+  /** Scales the fog to the size of the laid-out graph. */
+  private fitFog(): void {
+    const fog = this.graph?.scene().fog;
+    const box = this.graph?.getGraphBbox();
+    if (!(fog instanceof FogExp2) || !box) return;
+    const radius = Math.max(box.x[1] - box.x[0], box.y[1] - box.y[0], box.z[1] - box.z[0]) / 2;
+    fog.density = radius > 0 ? FOG_SCALE / radius : FOG_DEFAULT_DENSITY;
   }
 
   private draw(): void {
@@ -211,12 +271,18 @@ export class GraphView {
     const nodes = data.nodes.map((n) => ({ ...n }));
     this.nodesById = new Map(nodes.map((n) => [n.id, n]));
     this.needsFit = true;
+    this.engineRunning = true;
+    this.wake();
     this.graph.graphData({
       nodes,
       links: data.links.map((l) => ({ source: l.source, target: l.target })),
     });
     // First framing on the warmed-up layout; fit() runs again on engine stop.
-    window.setTimeout(() => this.graph?.zoomToFit(400, 40), FIRST_FIT_DELAY_MS);
+    window.setTimeout(() => {
+      this.wake();
+      this.fitFog();
+      this.graph?.zoomToFit(400, 40);
+    }, FIRST_FIT_DELAY_MS);
   }
 
   /** A neuron: glowing soma, organic dendrites and a dim title below. */
@@ -264,7 +330,7 @@ export class GraphView {
 
     look.dendrites.color.copy(base).lerp(DENDRITE_TINT, DENDRITE_SHADE);
     look.dendrites.emissive.copy(base);
-    look.dendrites.emissiveIntensity = dimmed ? 0 : firing ? 0.35 : 0.08;
+    look.dendrites.emissiveIntensity = dimmed ? 0 : firing ? 0.4 : 0.16;
 
     look.core.color.copy(base);
     look.core.opacity = dimmed ? 0 : firing ? CORE_OPACITY * 2.5 : CORE_OPACITY;
@@ -301,7 +367,8 @@ export class GraphView {
     graph
       ?.linkColor(graph.linkColor())
       .linkWidth(graph.linkWidth())
-      .linkDirectionalParticleWidth(graph.linkDirectionalParticleWidth());
+      .linkDirectionalParticleWidth(graph.linkDirectionalParticleWidth())
+      .linkDirectionalParticles(graph.linkDirectionalParticles());
   }
 
   private click(node: Node): void {
@@ -309,6 +376,7 @@ export class GraphView {
     const { x = 0, y = 0, z = 0 } = node;
     const distance = 70;
     const ratio = 1 + distance / Math.max(Math.hypot(x, y, z), 1);
+    this.wake();
     this.graph?.cameraPosition({ x: x * ratio, y: y * ratio, z: z * ratio }, { x, y, z }, 700);
     window.setTimeout(() => this.onOpen(node), 450);
   }
@@ -330,6 +398,7 @@ export class GraphView {
   private resize(): void {
     if (!this.graph || !this.isVisible()) return;
     this.graph.width(this.container.clientWidth).height(this.container.clientHeight);
+    this.wake();
   }
 
   private isVisible(): boolean {
@@ -343,7 +412,7 @@ function createLights() {
   key.position.set(1, 1.2, 1);
   const fill = new DirectionalLight(0x9fb4ff, 0.45);
   fill.position.set(-1, -0.4, -0.8);
-  return [new AmbientLight(0xffffff, 0.3), key, fill];
+  return [new AmbientLight(0xffffff, 0.5), key, fill];
 }
 
 /** A white radial gradient, tinted per neuron through the sprite colour. */

@@ -81,6 +81,13 @@ Os arquivos ficam em `migrations/` na raiz, nomeados `<versão>_<descrição>.sq
 e são embutidos pelo pacote `migrations`, que a composition root injeta no
 repositório do índice.
 
+### Desempenho do grafo 3D
+
+O grafo renderiza sob demanda: desenha enquanto o layout se acomoda, a câmera
+anima ou há interação (ponteiro, roda), e pausa após 1,5 s de inatividade; fora
+da aba do grafo fica pausado. Os pulsos só correm nas fibras do neurônio sob o
+mouse. A resolução é a nativa da tela (até 2×), sem supersampling.
+
 ### O arquivo é a fonte da verdade
 
 As notas são arquivos Markdown comuns. O índice SQLite (em

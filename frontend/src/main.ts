@@ -320,6 +320,7 @@ class App {
     byId('tab-editor').classList.toggle('active', view === 'editor');
     byId('tab-graph').classList.toggle('active', view === 'graph');
     if (view === 'graph') void this.loadGraph();
+    else this.graph.hide();
   }
 
   private async loadGraph(): Promise<void> {
