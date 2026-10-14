@@ -32,6 +32,19 @@ func (r *Runtime) Context() context.Context {
 	return r.ctx
 }
 
+// Emit sends an event to the frontend. Before startup there is no Wails
+// context and the event is dropped: the runtime functions abort the process
+// when given any other context.
+func (r *Runtime) Emit(name string, data any) {
+	r.mu.RLock()
+	ctx := r.ctx
+	r.mu.RUnlock()
+	if ctx == nil {
+		return
+	}
+	runtime.EventsEmit(ctx, name, data)
+}
+
 // ChooseDirectory opens the native folder picker. An empty path means the
 // user cancelled.
 func (r *Runtime) ChooseDirectory(title string) (string, error) {

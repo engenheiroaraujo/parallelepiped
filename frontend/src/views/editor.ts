@@ -80,6 +80,11 @@ export class Editor {
     this.silent = false;
   }
 
+  /** Current document text. */
+  content(): string {
+    return this.view.state.doc.toString();
+  }
+
   focus(): void {
     this.view.focus();
   }

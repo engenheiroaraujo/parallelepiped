@@ -14,6 +14,7 @@ internal/
     vault/                 abrir cofre, cofres recentes, árvore de arquivos
     notes/                 ler, salvar, criar, renomear e apagar notas (.md)
     index/                 índice SQLite: links, backlinks, tags, busca FTS5, grafo
+    watcher/               observa o cofre (fsnotify) e reindexa mudanças feitas fora do app
       handler/             struct ligada ao frontend pelo Wails (transporte)
       service/             casos de uso
       model/               entidades e regras puras (parse de [[links]], grafo)
@@ -45,6 +46,11 @@ simples — nunca importando o handler ou o model de outro módulo:
 - `vault/service.IndexBuilder` — o vault pede ao índice para reconstruir ao abrir um cofre.
 - `notes/service.RootProvider` — as notas perguntam ao vault qual é a pasta aberta.
 - `notes/service.Indexer` — cada escrita de nota atualiza o índice (`Upsert`/`Remove`).
+  Na composition root quem o implementa é o `watcher/service.Service`, que repassa ao
+  índice e registra o conteúdo gravado pelo próprio app.
+- `vault/service.Watcher` — ao abrir um cofre, o vault para o watcher anterior antes de
+  reconstruir o índice e começa a observar a nova pasta depois.
+- `watcher/service.Indexer` — o watcher atualiza o índice (`Upsert`/`Remove`/`Rebuild`).
 
 ## Adaptações da arquitetura para desktop
 
@@ -77,6 +83,34 @@ As notas são arquivos Markdown comuns. O índice SQLite (em
 falhar depois que o arquivo foi gravado, a falha é registrada no log e a
 gravação não é desfeita. Abrir o cofre de novo reconstrói o índice.
 
+### Watcher do cofre
+
+`watcher/repository.FSSource` coloca um watch do fsnotify em cada pasta visível
+do cofre (o fsnotify não é recursivo; pastas ocultas como `.git` e `.trash` ficam
+de fora) e acrescenta pastas novas conforme aparecem. Os eventos vão para
+`watcher/service`, que espera cada caminho ficar 300 ms quieto
+(`model.Debouncer`) e então lê o arquivo do disco:
+
+- existe → `Upsert`; não existe mais → `Remove`;
+- pasta removida/renomeada, ou eventos perdidos (overflow) → `Rebuild` do cofre,
+  já que o índice não sabe listar as notas de uma pasta.
+
+**Escritas do próprio app.** O `FileRepository` grava num `.write-*.tmp` (oculto,
+ignorado) e renomeia sobre a nota, o que gera eventos na nota. Como as notas
+escrevem no índice através do watcher, ele guarda o hash do conteúdo indexado
+(`model.Ledger`); se o disco tem exatamente esse conteúdo — ou se a nota já foi
+removida pelo app — o evento é descartado sem reindexar nem notificar. Não há
+janela de tempo: uma edição externa logo depois de um save é reindexada.
+
+Cada lote sincronizado gera o evento Wails `vault:changed` com
+`{"paths": [...]}` (caminhos relativos; uma pasta cobre tudo abaixo dela e `""`
+é o cofre inteiro). `watcher/handler.Notifier` emite via `platform/desktop`; não
+é ligado ao `Bind`, porque o frontend só escuta. O frontend atualiza a árvore,
+os backlinks da nota aberta e o grafo visível, e recarrega a nota aberta se ela
+mudou e não há edição pendente (se sumiu, fecha o editor com um aviso).
+
+O watcher é encerrado no `OnShutdown` do Wails, antes de o índice ser fechado.
+
 ### Notas apagadas
 
 Apagar uma nota a move para `.trash/` dentro do cofre, com data no nome;
@@ -93,7 +127,9 @@ Códigos: `invalid_input`, `not_found`, `conflict`, `unavailable`, `internal`.
 
 ## Próximas fases
 
-1. Watcher do cofre (fsnotify) para reindexar mudanças feitas fora do app.
-2. Renomear nota reescrevendo os `[[links]]` que apontam para ela.
-3. Pré-visualização do Markdown renderizado (live preview).
-4. Plugins isolados em WebAssembly (wazero), com permissões declaradas.
+1. Renomear nota reescrevendo os `[[links]]` que apontam para ela.
+2. Pré-visualização do Markdown renderizado (live preview).
+3. Plugins isolados em WebAssembly (wazero), com permissões declaradas.
+4. Watcher: avisar quando a nota aberta muda fora do app enquanto há edição
+   pendente (hoje a versão do editor vence no próximo save) e reindexar só a
+   pasta afetada em vez de reconstruir o cofre inteiro.

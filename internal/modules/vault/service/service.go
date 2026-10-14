@@ -29,20 +29,27 @@ type IndexBuilder interface {
 	Rebuild(ctx context.Context, root string) error
 }
 
+// Watcher follows changes made to the vault folder outside the app.
+type Watcher interface {
+	Watch(ctx context.Context, root string) error
+	Stop()
+}
+
 // Service tracks the open vault. It also implements the RootProvider
 // contract the other modules use to find the vault folder.
 type Service struct {
 	recent RecentRepository
 	tree   TreeReader
 	index  IndexBuilder
+	watch  Watcher
 	now    func() time.Time
 
 	mu      sync.RWMutex
 	current *model.Vault
 }
 
-func New(recent RecentRepository, tree TreeReader, index IndexBuilder) *Service {
-	return &Service{recent: recent, tree: tree, index: index, now: time.Now}
+func New(recent RecentRepository, tree TreeReader, index IndexBuilder, watch Watcher) *Service {
+	return &Service{recent: recent, tree: tree, index: index, watch: watch, now: time.Now}
 }
 
 // Open makes the folder at path the current vault and indexes it.
@@ -58,13 +65,27 @@ func (s *Service) Open(ctx context.Context, path string) (model.Vault, error) {
 	if !isDir {
 		return model.Vault{}, errs.ErrVaultNotFound
 	}
+	// The previous vault's watcher must not touch the index once it switches.
+	s.watch.Stop()
 	if err := s.index.Rebuild(ctx, v.Path); err != nil {
+		// The index still serves the previous vault, so keep watching it.
+		if previous, currentErr := s.Current(); currentErr == nil {
+			if watchErr := s.watch.Watch(ctx, previous.Path); watchErr != nil {
+				slog.WarnContext(ctx, "watch vault failed", "error", watchErr)
+			}
+		}
 		return model.Vault{}, err
 	}
 
 	s.mu.Lock()
 	s.current = &v
 	s.mu.Unlock()
+
+	// Without the watcher the app still works; outside edits wait for the
+	// next open.
+	if err := s.watch.Watch(ctx, v.Path); err != nil {
+		slog.WarnContext(ctx, "watch vault failed", "error", err)
+	}
 
 	// The vault is open either way; failing to remember it is not fatal.
 	if err := s.remember(ctx, v); err != nil {

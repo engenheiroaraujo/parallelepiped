@@ -28,6 +28,10 @@ import (
 	vaulthandler "parallelepiped/internal/modules/vault/handler"
 	vaultrepository "parallelepiped/internal/modules/vault/repository"
 	vaultservice "parallelepiped/internal/modules/vault/service"
+	watcherhandler "parallelepiped/internal/modules/watcher/handler"
+	watchermodel "parallelepiped/internal/modules/watcher/model"
+	watcherrepository "parallelepiped/internal/modules/watcher/repository"
+	watcherservice "parallelepiped/internal/modules/watcher/service"
 	"parallelepiped/internal/platform/config"
 	"parallelepiped/internal/platform/desktop"
 	applog "parallelepiped/internal/platform/log"
@@ -68,12 +72,31 @@ func run() error {
 	index := indexservice.New(openIndex, indexrepository.Scanner{})
 	defer index.Close()
 
+	openSource := func(root string) (watcherservice.Subscription, error) {
+		sub, err := watcherrepository.FSSource{}.Watch(root)
+		if err != nil {
+			return nil, err
+		}
+		return sub, nil
+	}
+	watcher := watcherservice.New(
+		index,
+		watcherrepository.FileReader{},
+		openSource,
+		watcherhandler.NewNotifier(runtime),
+		watchermodel.DebounceDelay,
+	)
+	// Runs before index.Close, so no event re-indexes into a closed store.
+	defer watcher.Close()
+
 	vaults := vaultservice.New(
 		vaultrepository.NewRecentRepository(cfg.ConfigDir),
 		vaultrepository.TreeReader{},
 		index,
+		watcher,
 	)
-	notes := notesservice.New(notesrepository.FileRepository{}, vaults, index)
+	// Notes write through the watcher so it recognises the app's own saves.
+	notes := notesservice.New(notesrepository.FileRepository{}, vaults, watcher)
 
 	err = wails.Run(&options.App{
 		Title:            "parallelepiped",
@@ -84,6 +107,7 @@ func run() error {
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
 		OnStartup:        runtime.Startup,
+		OnShutdown:       func(context.Context) { watcher.Close() },
 		Bind: []any{
 			vaulthandler.NewVault(runtime, vaults),
 			noteshandler.NewNotes(runtime, notes),

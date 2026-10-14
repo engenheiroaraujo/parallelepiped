@@ -1,8 +1,8 @@
 // Application controller: wires the views to the backend calls.
 
 import './style.css';
-import { indexApi, notesApi, vaultApi, type VaultInfo } from './api/api';
-import { describeError } from './api/client';
+import { indexApi, notesApi, vaultApi, vaultEvents, type VaultInfo } from './api/api';
+import { AppError, describeError } from './api/client';
 import { askText, byId, confirmAction, debounce, h, toast } from './ui/dom';
 import { Editor } from './views/editor';
 import { GraphView } from './views/graph';
@@ -17,6 +17,8 @@ class App {
   private vault: VaultInfo | null = null;
   private currentPath = '';
   private dirtyContent: string | null = null;
+  /** Serialises handling of outside changes so refreshes never interleave. */
+  private outsideChanges: Promise<void> = Promise.resolve();
 
   private readonly tree = new TreeView((path) => this.openNote(path));
   private readonly backlinks = new BacklinksView((path) => this.openNote(path));
@@ -35,6 +37,9 @@ class App {
 
   async start(): Promise<void> {
     this.bindControls();
+    vaultEvents.onChanged((paths) => {
+      this.outsideChanges = this.outsideChanges.then(() => this.onVaultChanged(paths));
+    });
     const recent = await vaultApi.recent().catch(() => []);
     if (recent.length > 0) {
       try {
@@ -193,6 +198,37 @@ class App {
     }
   }
 
+  /** Notes changed on disk outside the app (another editor, a sync client). */
+  private async onVaultChanged(paths: string[]): Promise<void> {
+    if (!this.vault) return;
+    try {
+      await this.refreshTree();
+      const open = this.currentPath;
+      if (open && paths.some((p) => covers(p, open))) await this.reloadOpenNote(open);
+      if (this.currentPath) this.backlinks.render(await indexApi.backlinks(this.currentPath));
+      if (!byId('graph-view').hidden) this.graph.setData(await indexApi.graph());
+    } catch (err) {
+      toast(describeError(err));
+    }
+  }
+
+  /** Reloads the open note from disk unless the user has unsaved edits. */
+  private async reloadOpenNote(path: string): Promise<void> {
+    if (this.dirtyContent !== null) return;
+    try {
+      const note = await notesApi.read(path);
+      // The user may have switched notes or typed while the read ran.
+      if (this.currentPath !== path || this.dirtyContent !== null) return;
+      if (note.content !== this.editor.content()) this.editor.load(note.content);
+    } catch (err) {
+      if (!(err instanceof AppError && err.code === 'not_found')) throw err;
+      if (this.currentPath !== path || this.dirtyContent !== null) return;
+      this.currentPath = '';
+      this.showEmptyNote();
+      toast('A nota aberta foi movida ou apagada fora do aplicativo.');
+    }
+  }
+
   private async createNote(): Promise<void> {
     if (!this.vault) return;
     const name = await askText('Nome da nova nota');
@@ -273,6 +309,14 @@ class App {
   private setStatus(text: string): void {
     byId('save-status').textContent = text;
   }
+}
+
+/** Whether a changed path (a note, a folder, or "" for the whole vault) covers note. */
+function covers(changed: string, note: string): boolean {
+  // Vault paths are case-insensitive on Windows, the platform this app targets.
+  const c = changed.toLowerCase();
+  const n = note.toLowerCase();
+  return c === '' || c === n || n.startsWith(c + '/');
 }
 
 function titleOf(path: string): string {
