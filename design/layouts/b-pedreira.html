@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>B — Pedreira</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .app { display: grid; grid-template-columns: 64px 270px 1fr 330px; height: 100vh; }
+
+  /* Rail: logo, main sections, settings at the bottom. */
+  .rail { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0; background: var(--stone-0); border-right: 1px solid var(--line); }
+  .rail .logo { width: 34px; height: 34px; margin-bottom: 14px; }
+  .rail button { all: unset; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; color: var(--text-3); position: relative; }
+  .rail button.on { color: #d6d0ff; background: var(--accent-soft); }
+  .rail button.on::before { content: ''; position: absolute; left: -12px; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--accent); }
+  .rail .grow { flex: 1; }
+
+  /* Explorer column with granite grain. */
+  .explorer { border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .explorer .head { padding: 18px 18px 10px; }
+  .explorer .head b { font: 600 16px var(--display); display: block; }
+  .search { margin: 0 14px 12px; display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--stone-2); border: 1px solid var(--line); color: var(--text-3); font-size: 13px; }
+  .search span:not(.kbd) { flex: 1; }
+  .tree { padding: 0 8px; font-size: 13px; overflow: hidden; }
+  .tree .f { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--text-2); border-radius: 8px; }
+  .tree .n { padding: 5px 10px 5px 34px; color: var(--text-2); border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree .n.on { background: var(--stone-3); color: var(--text); box-shadow: inset 2px 0 0 #34d399; }
+  .tree .f small { margin-left: auto; color: var(--text-3); }
+
+  /* Editor: a sheet of paper on the quarry floor. */
+  .main { display: flex; flex-direction: column; background: var(--stone-0); }
+  .tabs { display: flex; gap: 6px; padding: 10px 16px 0; }
+  .tab { padding: 8px 14px; border-radius: 10px 10px 0 0; color: var(--text-3); font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .tab.on { background: var(--stone-2); color: var(--text); }
+  .paper { flex: 1; margin: 0 16px 16px; background: var(--stone-2); border-radius: 0 14px 14px 14px; border: 1px solid var(--line); overflow: hidden; display: flex; flex-direction: column; }
+  .paper .bar { display: flex; align-items: center; gap: 10px; padding: 12px 22px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--text-3); }
+  .paper .bar span:first-child { flex: 1; }
+  .paper .body { max-width: 720px; margin: 0 auto; padding: 40px 32px; width: 100%; }
+
+  /* Context: local graph of the open note, backlinks, outgoing, tags. */
+  .context { border-left: 1px solid var(--line); padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+  .card { background: var(--stone-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .card h4 { margin: 0 0 10px; font: 600 11px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; }
+  .local { height: 230px; padding: 0; overflow: hidden; position: relative; }
+  .local svg { width: 100%; height: 100%; }
+  .local h4 { position: absolute; top: 14px; left: 14px; right: 14px; }
+  .link { display: flex; gap: 10px; align-items: center; padding: 6px 4px; font-size: 13px; color: var(--text-2); }
+  .link small { margin-left: auto; color: var(--text-3); }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <img class="logo" src="../icons/app-icon.svg" alt="">
+    <button class="on" title="Notas"><svg class="icon" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM9 8h6M9 12h6M9 16h4"/></svg></button>
+    <button title="Grafo"><svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 7"/></svg></button>
+    <button title="Busca"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+    <button title="Cérebro do projeto"><svg class="icon" viewBox="0 0 24 24"><path d="M9 4a3 3 0 00-3 3 3 3 0 00-2 5 3 3 0 002 5 3 3 0 006 0V7a3 3 0 00-3-3zM15 4a3 3 0 013 3 3 3 0 012 5 3 3 0 01-2 5 3 3 0 01-6 0"/></svg></button>
+    <button title="Diário"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg></button>
+    <div class="grow"></div>
+    <button title="Configurações"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg></button>
+  </nav>
+
+  <aside class="explorer granite">
+    <div class="head"><b>parallelepiped-demo</b><span class="faint" style="font-size:12px">39 notas · 6 pastas</span></div>
+    <div class="search"><svg class="icon" viewBox="0 0 24 24" style="width:15px"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Buscar</span><span class="kbd">Ctrl K</span></div>
+    <div class="tree">
+      <div class="f"><span class="dot" style="background:#c084fc"></span>arquitetura<small>7</small></div>
+      <div class="f"><span class="dot" style="background:#f472b6"></span>diario<small>3</small></div>
+      <div class="f"><span class="dot" style="background:#34d399"></span>projeto<small>11</small></div>
+      <div class="n">Simulação de forças</div>
+      <div class="n">Backlinks</div>
+      <div class="n">Desempenho do grafo</div>
+      <div class="n on">Grafo 3D</div>
+      <div class="n">Wikilinks</div>
+      <div class="f"><span class="dot" style="background:#60a5fa"></span>estudos<small>7</small></div>
+      <div class="f"><span class="dot" style="background:#fb923c"></span>leituras<small>3</small></div>
+      <div class="f"><span class="dot" style="background:#facc15"></span>tecnologias<small>6</small></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="tabs">
+      <div class="tab on"><span class="dot" style="background:#34d399"></span>Grafo 3D</div>
+      <div class="tab"><span class="dot" style="background:#fb923c"></span>ADR 002 Índice em SQLite</div>
+      <div class="tab"><span class="dot" style="background:#60a5fa"></span>Índice SQLite</div>
+    </div>
+    <div class="paper">
+      <div class="bar"><span>projeto / Grafo 3D</span><span>412 palavras</span><span>Salvo</span></div>
+      <div class="body prose">
+        <h1>Grafo 3D</h1>
+        <p class="faint" style="font-size:13px">Editado há 4 min</p>
+        <p>Cada nota vira um neurônio e cada ligação, uma fibra. Os dados vêm do índice descrito na <span class="wl">ADR 002 Índice em SQLite</span> e são relidos quando o cofre muda.</p>
+        <h2>Fluxo</h2>
+        <ul><li>Equilibra <code>repulsão</code>, <code>molas</code> e <code>gravidade</code></li><li>Segue a <span class="wl">Simulação de forças</span></li><li>Lê as ligações do <span class="wl">Índice SQLite</span></li></ul>
+        <p>Ver também <span class="wl">Desempenho do grafo</span>.</p>
+      </div>
+    </div>
+  </main>
+
+  <aside class="context">
+    <div class="card local"><h4><span>Vizinhança</span><span style="color:var(--accent)">abrir grafo</span></h4><svg data-graph data-nodes="14" data-seed="3" data-spread="0.9" data-focus="50,55"></svg></div>
+    <div class="card"><h4><span>Backlinks</span><span>3</span></h4>
+      <div class="link"><span class="dot" style="background:#c084fc"></span>Visão geral do projeto</div>
+      <div class="link"><span class="dot" style="background:#fb923c"></span>ADR 002 Índice em SQLite</div>
+      <div class="link"><span class="dot" style="background:#60a5fa"></span>Diário 2026-10-14</div></div>
+    <div class="card"><h4><span>Ligações de saída</span><span>4</span></h4>
+      <div class="link"><span class="dot" style="background:#34d399"></span>Simulação de forças</div>
+      <div class="link"><span class="dot" style="background:#60a5fa"></span>Índice SQLite</div>
+      <div class="link"><span class="dot" style="background:#34d399"></span>Desempenho do grafo<small>nova</small></div></div>
+    <div class="card"><h4><span>Tags</span></h4><span class="chip">#grafo</span> <span class="chip">#arquitetura</span> <span class="chip">#performance</span></div>
+  </aside>
+</div>
+<script src="graph.js"></script>
+</body>
+</html>

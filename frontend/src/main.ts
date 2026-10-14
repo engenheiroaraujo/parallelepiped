@@ -1,27 +1,40 @@
 // Application controller: wires the views to the backend calls.
 
 import './style.css';
-import { brainApi, brainEvents, indexApi, notesApi, vaultApi, vaultEvents, type ImportResult, type VaultInfo } from './api/api';
+import { brainApi, brainEvents, indexApi, notesApi, vaultApi, vaultEvents, type Backlink, type ImportResult, type VaultInfo } from './api/api';
 import { AppError, describeError } from './api/client';
+import { folderOf } from './ui/colors';
 import { askText, byId, confirmAction, debounce, h, toast } from './ui/dom';
+import { initTheme, toggleTheme } from './ui/theme';
+import { ContextView, resolve } from './views/context';
 import { Editor } from './views/editor';
 import { GraphView } from './views/graph';
-import { BacklinksView, SearchView } from './views/panels';
+import { SearchView } from './views/panels';
+import { TabsView } from './views/tabs';
 import { TreeView } from './views/tree';
 
 type ViewName = 'editor' | 'graph';
 
 const SAVE_DELAY_MS = 600;
+const CONTEXT_DELAY_MS = 400;
 
 class App {
   private vault: VaultInfo | null = null;
   private currentPath = '';
   private dirtyContent: string | null = null;
+  private currentBacklinks: Backlink[] = [];
   /** Serialises handling of outside changes so refreshes never interleave. */
   private outsideChanges: Promise<void> = Promise.resolve();
 
   private readonly tree = new TreeView((path) => this.openNote(path));
-  private readonly backlinks = new BacklinksView((path) => this.openNote(path));
+  private readonly tabs = new TabsView(
+    (path) => this.openNote(path),
+    (path) => void this.closeTab(path),
+  );
+  private readonly context = new ContextView(
+    (path) => this.openNote(path),
+    (target) => this.followLink(target),
+  );
   private readonly search = new SearchView((path) => this.openNote(path));
   private readonly graph = new GraphView(byId('graph'), (node) =>
     node.unresolved ? this.followLink(node.title) : this.openNote(node.id),
@@ -34,8 +47,10 @@ class App {
 
   private readonly saveSoon = debounce(() => void this.flush(), SAVE_DELAY_MS);
   private readonly searchSoon = debounce((query: string) => void this.runSearch(query), 200);
+  private readonly contextSoon = debounce((content: string) => this.context.updateText(content, this.tree.notePaths()), CONTEXT_DELAY_MS);
 
   async start(): Promise<void> {
+    initTheme();
     this.bindControls();
     vaultEvents.onChanged((paths) => {
       this.outsideChanges = this.outsideChanges.then(() => this.onVaultChanged(paths));
@@ -58,8 +73,11 @@ class App {
     byId('new-note').addEventListener('click', () => void this.createNote());
     byId('import-project').addEventListener('click', () => void this.importProject());
     byId('delete-note').addEventListener('click', () => void this.deleteNote());
-    byId('tab-editor').addEventListener('click', () => this.showView('editor'));
-    byId('tab-graph').addEventListener('click', () => this.showView('graph'));
+    byId('rail-notes').addEventListener('click', () => this.showView('editor'));
+    byId('rail-graph').addEventListener('click', () => this.showView('graph'));
+    byId('open-graph').addEventListener('click', () => this.showView('graph'));
+    byId('rail-search').addEventListener('click', () => this.focusSearch());
+    byId('theme-toggle').addEventListener('click', () => toggleTheme());
 
     const title = byId<HTMLInputElement>('note-title');
     title.addEventListener('keydown', (e) => {
@@ -73,6 +91,13 @@ class App {
 
     const searchInput = byId<HTMLInputElement>('search');
     searchInput.addEventListener('input', () => this.searchSoon(searchInput.value));
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        searchInput.value = '';
+        void this.runSearch('');
+        searchInput.blur();
+      }
+    });
 
     window.addEventListener('keydown', (e) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -83,15 +108,25 @@ class App {
       } else if (key === 'g') {
         e.preventDefault();
         this.showView(byId('graph-view').hidden ? 'graph' : 'editor');
-      } else if (key === 'f' && e.shiftKey) {
+      } else if (key === 'k' || (key === 'f' && e.shiftKey)) {
         e.preventDefault();
-        searchInput.focus();
+        this.focusSearch();
       } else if (key === 's') {
         e.preventDefault();
         void this.flush();
+      } else if (key === 'w' && this.currentPath) {
+        e.preventDefault();
+        void this.closeTab(this.currentPath);
       }
     });
     window.addEventListener('beforeunload', () => void this.flush());
+  }
+
+  private focusSearch(): void {
+    this.showView('editor');
+    const input = byId<HTMLInputElement>('search');
+    input.focus();
+    input.select();
   }
 
   private async chooseVault(): Promise<void> {
@@ -108,8 +143,10 @@ class App {
     this.vault = info;
     this.currentPath = '';
     byId('vault-name').textContent = info.name;
+    byId('vault-name').title = info.path;
     byId('welcome').hidden = true;
     byId('workspace').hidden = false;
+    this.tabs.clear();
     await this.refreshTree();
     this.showEmptyNote();
     this.showView('editor');
@@ -121,7 +158,7 @@ class App {
     const list = byId('recent-vaults');
     list.replaceChildren(
       ...recent.map((v) => {
-        const button = h('button', { className: 'link-item', textContent: v.name, title: v.path });
+        const button = h('button', { className: 'link-item', title: v.path }, h('span', { className: 'name', textContent: v.name }));
         button.addEventListener('click', () => vaultApi.open(v.path).then((info) => this.useVault(info)).catch((err) => toast(describeError(err))));
         return h('li', {}, button);
       }),
@@ -130,6 +167,10 @@ class App {
 
   private async refreshTree(): Promise<void> {
     this.tree.render(await vaultApi.tree());
+    const { notes, folders } = this.tree.stats();
+    byId('vault-stats').textContent = `${notes} ${notes === 1 ? 'nota' : 'notas'} · ${folders} ${folders === 1 ? 'pasta' : 'pastas'}`;
+    this.tabs.setColors(this.tree.colors());
+    this.tabs.retain(new Set(this.tree.notePaths()));
   }
 
   async openNote(path: string): Promise<void> {
@@ -139,33 +180,52 @@ class App {
       this.currentPath = note.path;
       this.editor.load(note.content);
       this.tree.setActive(note.path);
-      byId<HTMLInputElement>('note-title').value = note.title;
-      byId('note-bar').hidden = false;
+      this.tabs.open(note.path);
+      this.showNoteBar(note.path, note.content);
       byId('editor-empty').hidden = true;
       this.setStatus('');
       this.showView('editor');
       this.editor.focus();
-      this.backlinks.render(await indexApi.backlinks(note.path));
+      this.currentBacklinks = await indexApi.backlinks(note.path);
+      this.context.show(note.path, note.content, this.currentBacklinks, this.tree.notePaths(), this.tree.colors());
     } catch (err) {
       toast(describeError(err));
     }
   }
 
+  private showNoteBar(path: string, content: string): void {
+    const folder = folderOf(path);
+    byId('note-folder').textContent = folder ? `${folder} /` : '';
+    byId<HTMLInputElement>('note-title').value = titleOf(path);
+    this.setWordCount(content);
+    byId('note-bar').hidden = false;
+  }
+
+  private setWordCount(content: string): void {
+    const words = content.trim() ? content.trim().split(/\s+/).length : 0;
+    byId('word-count').textContent = `${words} ${words === 1 ? 'palavra' : 'palavras'}`;
+  }
+
   private showEmptyNote(): void {
+    this.currentPath = '';
     this.editor.load('');
     this.tree.setActive('');
-    this.backlinks.clear();
+    this.context.clear();
     byId('note-bar').hidden = true;
     byId('editor-empty').hidden = false;
   }
 
+  private async closeTab(path: string): Promise<void> {
+    if (path === this.currentPath) await this.flush();
+    const next = this.tabs.close(path);
+    if (path !== this.currentPath) return;
+    if (next) await this.openNote(next);
+    else this.showEmptyNote();
+  }
+
   /** Opens the note a [[link]] points to, creating it when missing. */
   private async followLink(target: string): Promise<void> {
-    const wanted = target.toLowerCase().replace(/\.md$/, '');
-    const paths = this.tree.notePaths();
-    const match =
-      paths.find((p) => p.toLowerCase().replace(/\.md$/, '') === wanted) ??
-      paths.find((p) => titleOf(p).toLowerCase() === wanted);
+    const match = resolve(target, this.tree.notePaths());
     if (match) return this.openNote(match);
 
     try {
@@ -181,7 +241,9 @@ class App {
     if (!this.currentPath) return;
     this.dirtyContent = content;
     this.setStatus('Editando…');
+    this.setWordCount(content);
     this.saveSoon();
+    this.contextSoon(content);
   }
 
   private async flush(): Promise<void> {
@@ -206,7 +268,10 @@ class App {
       await this.refreshTree();
       const open = this.currentPath;
       if (open && paths.some((p) => covers(p, open))) await this.reloadOpenNote(open);
-      if (this.currentPath) this.backlinks.render(await indexApi.backlinks(this.currentPath));
+      if (this.currentPath) {
+        this.currentBacklinks = await indexApi.backlinks(this.currentPath);
+        this.context.show(this.currentPath, this.editor.content(), this.currentBacklinks, this.tree.notePaths(), this.tree.colors());
+      }
       if (!byId('graph-view').hidden) this.graph.setData(await indexApi.graph());
     } catch (err) {
       toast(describeError(err));
@@ -220,11 +285,14 @@ class App {
       const note = await notesApi.read(path);
       // The user may have switched notes or typed while the read ran.
       if (this.currentPath !== path || this.dirtyContent !== null) return;
-      if (note.content !== this.editor.content()) this.editor.load(note.content);
+      if (note.content !== this.editor.content()) {
+        this.editor.load(note.content);
+        this.setWordCount(note.content);
+      }
     } catch (err) {
       if (!(err instanceof AppError && err.code === 'not_found')) throw err;
       if (this.currentPath !== path || this.dirtyContent !== null) return;
-      this.currentPath = '';
+      this.tabs.close(path);
       this.showEmptyNote();
       toast('A nota aberta foi movida ou apagada fora do aplicativo.');
     }
@@ -247,12 +315,15 @@ class App {
     const title = newTitle.trim();
     if (!this.currentPath || !title || title === titleOf(this.currentPath)) return;
     await this.flush();
-    const folder = this.currentPath.includes('/') ? this.currentPath.slice(0, this.currentPath.lastIndexOf('/') + 1) : '';
+    const folder = folderOf(this.currentPath);
     try {
-      const note = await notesApi.rename(this.currentPath, folder + title);
+      const old = this.currentPath;
+      const note = await notesApi.rename(old, folder ? `${folder}/${title}` : title);
       this.currentPath = note.path;
+      this.tabs.rename(old, note.path);
       await this.refreshTree();
       this.tree.setActive(note.path);
+      this.showNoteBar(note.path, this.editor.content());
     } catch (err) {
       byId<HTMLInputElement>('note-title').value = titleOf(this.currentPath);
       toast(describeError(err));
@@ -264,11 +335,13 @@ class App {
     if (!(await confirmAction(`Mover "${titleOf(this.currentPath)}" para a lixeira do cofre?`))) return;
     this.saveSoon.cancel();
     this.dirtyContent = null;
+    const path = this.currentPath;
     try {
-      await notesApi.remove(this.currentPath);
-      this.currentPath = '';
+      await notesApi.remove(path);
+      const next = this.tabs.close(path);
       await this.refreshTree();
-      this.showEmptyNote();
+      if (next) await this.openNote(next);
+      else this.showEmptyNote();
     } catch (err) {
       toast(describeError(err));
     }
@@ -316,9 +389,10 @@ class App {
 
   private showView(view: ViewName): void {
     byId('editor-view').hidden = view !== 'editor';
+    byId('tabs').hidden = view !== 'editor';
     byId('graph-view').hidden = view !== 'graph';
-    byId('tab-editor').classList.toggle('active', view === 'editor');
-    byId('tab-graph').classList.toggle('active', view === 'graph');
+    byId('rail-notes').classList.toggle('active', view === 'editor');
+    byId('rail-graph').classList.toggle('active', view === 'graph');
     if (view === 'graph') void this.loadGraph();
     else this.graph.hide();
   }

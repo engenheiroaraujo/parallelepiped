@@ -1,0 +1,81 @@
+/* Shared look for the layout prototypes: granite darks, one violet accent,
+   folder colours for the neurons. Static mockups, not app code. */
+:root {
+  --stone-0: #111113;
+  --stone-1: #17171a;
+  --stone-2: #1e1e22;
+  --stone-3: #26262b;
+  --stone-4: #303036;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
+  --text: #e7e7ea;
+  --text-2: #a3a3ab;
+  --text-3: #6d6d76;
+  --accent: #8b7cf6;
+  --accent-soft: rgba(139, 124, 246, 0.16);
+  --sans: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Cascadia Code', Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--stone-0);
+  color: var(--text);
+  font: 14px/1.5 var(--sans);
+  overflow: hidden;
+}
+
+/* Fine granite grain: two layers of tiny dots. */
+.granite {
+  background-color: var(--stone-1);
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1.2px),
+    radial-gradient(rgba(0, 0, 0, 0.35) 1px, transparent 1.4px);
+  background-size: 7px 7px, 11px 11px;
+  background-position: 0 0, 3px 5px;
+}
+
+.glass {
+  background: rgba(23, 23, 26, 0.72);
+  backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+.kbd {
+  font: 11px var(--mono);
+  color: var(--text-2);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--stone-3); color: var(--text-2); font-size: 12px;
+}
+
+.icon { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* The stone logo used in the prototypes. */
+.logo { width: 28px; height: 28px; }
+
+.prose h1 { font: 600 30px/1.2 var(--display); letter-spacing: -0.01em; margin: 0 0 6px; }
+.prose h2 { font: 600 18px var(--display); margin: 26px 0 8px; }
+.prose p { color: #cfcfd4; margin: 0 0 12px; font-size: 15px; line-height: 1.75; }
+.prose .wl { color: #b4a9ff; border-bottom: 1px dashed rgba(180, 169, 255, 0.5); }
+.prose code { font: 13px var(--mono); background: var(--stone-3); padding: 1px 6px; border-radius: 5px; }
+.prose ul { margin: 0 0 12px; padding-left: 20px; color: #cfcfd4; font-size: 15px; line-height: 1.8; }

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>A — Cosmos</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .stage { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 45%, #1d1b26 0%, #121215 60%, #0d0d0f 100%); }
+  .stage svg { width: 100%; height: 100%; display: block; }
+
+  /* Top bar: vault switcher, command palette, view toggles. */
+  .top { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; }
+  .vault { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 10px; }
+  .vault b { font: 600 14px var(--display); white-space: nowrap; }
+  .palette { width: 520px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; color: var(--text-2); }
+  .palette span:not(.kbd) { flex: 1; }
+  .views { display: flex; gap: 2px; padding: 4px; }
+  .views button { all: unset; padding: 6px 10px; border-radius: 10px; color: var(--text-2); display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .views button.on { background: var(--accent-soft); color: #d6d0ff; }
+
+  /* Left dock: folders as colour legend + tree. */
+  .dock { position: fixed; left: 16px; top: 84px; bottom: 16px; width: 250px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .dock h4 { margin: 4px 6px; font: 600 11px var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+  .folder { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; color: var(--text-2); }
+  .folder.on { background: var(--stone-3); color: var(--text); }
+  .folder small { margin-left: auto; color: var(--text-3); font-size: 12px; }
+  .recent { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  .recent div { padding: 5px 8px; border-radius: 8px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Note sheet floating on the right. */
+  .sheet { position: fixed; right: 16px; top: 84px; bottom: 16px; width: 640px; display: flex; flex-direction: column; overflow: hidden; }
+  .sheet header { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); color: var(--text-2); font-size: 13px; }
+  .sheet header .crumb { flex: 1; }
+  .sheet .body { padding: 26px 36px; overflow: hidden; }
+  .sheet footer { margin-top: auto; padding: 12px 18px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .hint { position: fixed; left: 282px; bottom: 16px; padding: 8px 14px; font-size: 12px; color: var(--text-3); display: flex; gap: 14px; }
+</style>
+</head>
+<body>
+<div class="stage"><svg data-graph data-nodes="140" data-seed="12" data-spread="0.55" data-focus="38,52"></svg></div>
+
+<div class="top">
+  <div class="vault glass"><img class="logo" src="../icons/app-icon.svg" alt=""><b>parallelepiped-demo</b>
+    <svg class="icon" viewBox="0 0 24 24" style="width:14px;color:var(--text-3)"><path d="M6 9l6 6 6-6"/></svg></div>
+  <div class="palette glass"><svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Buscar notas, executar comandos…</span><span class="kbd">Ctrl K</span></div>
+  <div class="views glass">
+    <button class="on"><svg class="icon" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8 7l8 1M7 8l4 8M17 10l-4 7"/></svg>Grafo</button>
+    <button><svg class="icon" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM9 8h6M9 12h6M9 16h4"/></svg>Notas</button>
+    <button><svg class="icon" viewBox="0 0 24 24"><path d="M12 3a4 4 0 014 4 4 4 0 014 4 4 4 0 01-4 4 4 4 0 01-4 4 4 4 0 01-4-4 4 4 0 01-4-4 4 4 0 014-4 4 4 0 014-4z"/></svg>Cérebro</button>
+  </div>
+</div>
+
+<aside class="dock glass">
+  <h4>Pastas</h4>
+  <div class="folder on"><span class="dot" style="background:#c084fc"></span>arquitetura<small>7</small></div>
+  <div class="folder"><span class="dot" style="background:#f472b6"></span>diario<small>3</small></div>
+  <div class="folder"><span class="dot" style="background:#34d399"></span>projeto<small>11</small></div>
+  <div class="folder"><span class="dot" style="background:#60a5fa"></span>estudos<small>7</small></div>
+  <div class="folder"><span class="dot" style="background:#fb923c"></span>leituras<small>3</small></div>
+  <div class="folder"><span class="dot" style="background:#facc15"></span>tecnologias<small>6</small></div>
+  <h4 style="margin-top:10px">Recentes</h4>
+  <div class="recent">
+    <div>Grafo 3D</div><div>ADR 002 Índice em SQLite</div><div>Índice SQLite</div><div>Visão geral do projeto</div><div>Watcher do cofre</div>
+  </div>
+</aside>
+
+<section class="sheet glass">
+  <header><span class="dot" style="background:#34d399"></span><span class="crumb">projeto / <b style="color:var(--text)">Grafo 3D</b></span><span class="faint">Salvo</span>
+    <svg class="icon" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+    <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></header>
+  <div class="body prose">
+    <h1>Grafo 3D</h1>
+    <p class="faint" style="font-size:13px">Editado há 4 min · 7 ligações · 3 backlinks</p>
+    <p>Cada nota vira um neurônio e cada ligação, uma fibra. Os dados vêm do índice descrito na <span class="wl">ADR 002 Índice em SQLite</span> e são relidos quando o cofre muda.</p>
+    <h2>Fluxo</h2>
+    <ul><li>Equilibra <code>repulsão</code>, <code>molas</code> e <code>gravidade</code></li><li>Segue a <span class="wl">Simulação de forças</span></li><li>Lê as ligações do <span class="wl">Índice SQLite</span></li></ul>
+    <p>Ver também <span class="wl">Desempenho do grafo</span>.</p>
+  </div>
+  <footer><span class="faint" style="font-size:12px;margin-right:4px">Backlinks</span>
+    <span class="chip"><span class="dot" style="background:#c084fc"></span>Visão geral do projeto</span>
+    <span class="chip"><span class="dot" style="background:#fb923c"></span>ADR 002 Índice em SQLite</span>
+    <span class="chip"><span class="dot" style="background:#60a5fa"></span>Diário 2026-10-14</span></footer>
+</section>
+
+<div class="hint glass"><span>Arraste para girar</span><span>Roda: zoom</span><span>Clique: abrir</span><span>Esc: fechar nota</span></div>
+<script src="graph.js"></script>
+</body>
+</html>

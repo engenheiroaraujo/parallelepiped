@@ -27,6 +27,38 @@ const wikilinks = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
+// YAML front matter ("---" ... "---" at the top). Markdown alone reads its
+// last line plus the closing "---" as a setext heading; mark the block so CSS
+// shows it as quiet metadata instead.
+const MAX_FRONT_MATTER_LINES = 80;
+const frontMatterLine = Decoration.line({ class: 'cm-frontmatter' });
+
+function frontMatterDecorations(view: EditorView): DecorationSet {
+  const doc = view.state.doc;
+  if (doc.lines < 2 || doc.line(1).text.trim() !== '---') return Decoration.none;
+  const last = Math.min(doc.lines, MAX_FRONT_MATTER_LINES);
+  for (let n = 2; n <= last; n++) {
+    if (doc.line(n).text.trim() !== '---') continue;
+    const lines = [];
+    for (let i = 1; i <= n; i++) lines.push(frontMatterLine.range(doc.line(i).from));
+    return Decoration.set(lines);
+  }
+  return Decoration.none;
+}
+
+const frontMatter = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = frontMatterDecorations(view);
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged) this.decorations = frontMatterDecorations(update.view);
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 const markdownHighlight = HighlightStyle.define([
   { tag: tags.heading1, fontSize: '1.6em', fontWeight: '700' },
   { tag: tags.heading2, fontSize: '1.35em', fontWeight: '700' },
@@ -44,16 +76,16 @@ const markdownHighlight = HighlightStyle.define([
 
 const theme = EditorView.theme(
   {
-    '&': { height: '100%', backgroundColor: 'var(--bg)', color: 'var(--text)' },
-    '.cm-scroller': { fontFamily: 'var(--sans)', lineHeight: '1.65', padding: '24px 0' },
-    '.cm-content': { maxWidth: '760px', margin: '0 auto', padding: '0 32px', caretColor: 'var(--accent)' },
+    // Transparent: the editor sits on the "paper" panel of the layout.
+    '&': { height: '100%', backgroundColor: 'transparent', color: 'var(--text)', fontSize: '15px' },
+    '.cm-scroller': { fontFamily: 'var(--sans)', lineHeight: '1.75', padding: '36px 0' },
+    '.cm-content': { maxWidth: '760px', margin: '0 auto', padding: '0 40px', caretColor: 'var(--accent)' },
     '.cm-gutters': { display: 'none' },
     '.cm-activeLine': { backgroundColor: 'transparent' },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--selection) !important' },
     '.cm-cursor': { borderLeftColor: 'var(--accent)' },
     '.cm-tooltip': { backgroundColor: 'var(--panel)', border: '1px solid var(--border)' },
   },
-  { dark: true },
 );
 
 export interface EditorOptions {
@@ -99,6 +131,7 @@ export class Editor {
         theme,
         EditorView.lineWrapping,
         wikilinks,
+        frontMatter,
         autocompletion({ override: [(ctx) => this.completeLink(ctx)] }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !this.silent) this.options.onChange(update.state.doc.toString());

@@ -81,6 +81,19 @@ Os arquivos ficam em `migrations/` na raiz, nomeados `<versão>_<descrição>.sq
 e são embutidos pelo pacote `migrations`, que a composition root injeta no
 repositório do índice.
 
+### Layout e temas do frontend
+
+Layout "Pedreira" (protótipos em `design/layouts/`): trilho de ícones, explorador
+com textura de granito, abas e editor em "folha", e coluna de contexto da nota
+(mini-mapa 2D da vizinhança, backlinks, ligações de saída e tags — as duas
+últimas lidas do texto do editor, sem depender do índice).
+
+As cores de pasta saem de um só lugar (`frontend/src/ui/colors.ts`), então a
+árvore, as abas, o contexto e o grafo concordam. Os temas escuro e claro são
+tokens CSS em `html[data-theme]` (`frontend/src/ui/theme.ts`); a escolha fica no
+`localStorage` e, até o usuário escolher, segue o sistema. O grafo 3D troca
+fundo, névoa e rótulos com o tema e desliga o bloom no tema claro.
+
 ### Desempenho do grafo 3D
 
 O grafo renderiza sob demanda: desenha enquanto o layout se acomoda, a câmera

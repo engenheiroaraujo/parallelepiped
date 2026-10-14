@@ -1,34 +1,10 @@
-// Backlinks panel and search results.
+// Search results in the explorer.
 
-import type { Backlink, SearchHit } from '../api/api';
+import type { SearchHit } from '../api/api';
 import { byId, h } from '../ui/dom';
 
 const HIGHLIGHT_START = '\x02';
 const HIGHLIGHT_END = '\x03';
-
-export class BacklinksView {
-  private readonly list = byId('backlinks');
-
-  constructor(private readonly onOpen: (path: string) => void) {}
-
-  render(items: Backlink[]): void {
-    if (items.length === 0) {
-      this.list.replaceChildren(h('li', { className: 'empty', textContent: 'Nenhuma nota aponta para esta.' }));
-      return;
-    }
-    this.list.replaceChildren(
-      ...items.map((item) => {
-        const button = h('button', { className: 'link-item', textContent: item.title, title: item.path });
-        button.addEventListener('click', () => this.onOpen(item.path));
-        return h('li', {}, button);
-      }),
-    );
-  }
-
-  clear(): void {
-    this.list.replaceChildren();
-  }
-}
 
 export class SearchView {
   private readonly results = byId('search-results');

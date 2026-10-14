@@ -30,6 +30,8 @@ import {
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { GraphData, GraphNodeData } from '../api/api';
+import { folderColors, ROOT_COLOR, UNRESOLVED_COLOR } from '../ui/colors';
+import { currentTheme, onThemeChange, type Theme } from '../ui/theme';
 import { buildNeuron, hash } from './neuron';
 
 type Node = NodeObject & GraphNodeData;
@@ -38,12 +40,22 @@ type Link = LinkObject<Node>;
 // The default export is not generic over node/link types; narrow it once here.
 const Graph3D = ForceGraph3D as unknown as new (element: HTMLElement, config?: ConfigOptions) => ForceGraph3DInstance<Node, Link>;
 
-// One colour per folder that directly contains the note.
-const palette = ['#a855f7', '#ef4444', '#f97316', '#eab308', '#10b981', '#3b82f6', '#ec4899', '#14b8a6', '#84cc16', '#f43f5e'];
-const rootColor = '#a1a1aa';
-const unresolvedColor = '#52525b';
-const dimColor = '#2c2c32';
-const background = '#1e1e1e';
+// Per-theme scene colours. Folder colours come from ui/colors so the graph
+// matches the file tree. Bloom only suits the dark theme: on a light
+// background it washes the whole scene out.
+interface SceneLook {
+  background: string;
+  label: string;
+  dim: string;
+  highlight: string;
+  dendriteTint: Color;
+  bloom: boolean;
+}
+
+const SCENE_LOOKS: Record<Theme, SceneLook> = {
+  dark: { background: '#1e1e1e', label: '#9a9aa4', dim: '#2c2c32', highlight: '#f4f4f5', dendriteTint: new Color('#2a201c'), bloom: true },
+  light: { background: '#ecebe7', label: '#4a4a52', dim: '#d6d5d0', highlight: '#18181b', dendriteTint: new Color('#3a3631'), bloom: false },
+};
 
 // Neurons.
 // Like Obsidian, a note with more links is bigger: the radius grows with the
@@ -52,8 +64,7 @@ const SOMA_BASE_RADIUS = 1.2;
 const SOMA_DEGREE_RADIUS = 0.9;
 const SOMA_MAX_RADIUS = 12;
 const SOMA_GLOW = 0.5; // emissive intensity of the cell body
-const DENDRITE_SHADE = 0.55; // how far dendrites darken towards DENDRITE_TINT
-const DENDRITE_TINT = new Color('#2a201c');
+const DENDRITE_SHADE = 0.55; // how far dendrites shade towards the scene's dendriteTint
 const CORE_SCALE = 2.4; // inner glow diameter, in soma radii
 const CORE_OPACITY = 0.38;
 
@@ -74,8 +85,7 @@ const PULSE_WIDTH = 0.55;
 const FOG_SCALE = 0.18;
 const FOG_DEFAULT_DENSITY = 0.002;
 
-// Labels: dim enough to stay under the bloom threshold.
-const LABEL_COLOR = '#9a9aa4';
+// Labels: dim enough to stay under the bloom threshold (colour per theme).
 const LABEL_HEIGHT = 2.4;
 // Label texture resolution in px: sharp at normal zoom without the memory of
 // very large textures (one per note).
@@ -87,6 +97,11 @@ const CHARGE_PER_RADIUS = 25;
 const CHARGE_MAX_DISTANCE = 800;
 const LINK_BASE_DISTANCE = 45;
 const LINK_RADIUS_FACTOR = 4;
+// A weak pull towards the centre. Notes without links feel only repulsion,
+// so without it they drift far out and the camera framing shrinks the
+// connected cluster to a speck; orphans get a stronger pull.
+const GRAVITY = 0.008;
+const ORPHAN_GRAVITY = 0.05;
 
 const WARMUP_TICKS = 120;
 const COOLDOWN_MS = 3000;
@@ -126,12 +141,30 @@ export class GraphView {
   private engineRunning = false;
   private paused = false;
   private idleTimer = 0;
+  private look: SceneLook = SCENE_LOOKS[currentTheme()];
+  private bloomPass: UnrealBloomPass | null = null;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly onOpen: (node: GraphNodeData) => void,
   ) {
     new ResizeObserver(() => this.resize()).observe(container);
+    onThemeChange((theme) => this.setTheme(theme));
+  }
+
+  /** Recolours the scene and rebuilds the neurons (labels bake their colour). */
+  private setTheme(theme: Theme): void {
+    this.look = SCENE_LOOKS[theme];
+    const graph = this.graph;
+    if (!graph) return;
+    const scene = graph.scene();
+    scene.background = new Color(this.look.background);
+    if (scene.fog instanceof FogExp2) scene.fog.color.set(this.look.background);
+    if (this.bloomPass) this.bloomPass.enabled = this.look.bloom;
+    for (const look of this.looks.values()) disposeLook(look);
+    this.looks.clear();
+    graph.nodeThreeObject(graph.nodeThreeObject()).linkColor(graph.linkColor());
+    this.wake();
   }
 
   /** Stores the data; it is drawn when the view becomes visible. */
@@ -151,7 +184,7 @@ export class GraphView {
       controlType: 'orbit',
       rendererConfig: { antialias: true, alpha: false, powerPreference: 'high-performance' },
     })
-      .backgroundColor(background)
+      .backgroundColor(this.look.background)
       .showNavInfo(false)
       .nodeVal((n) => 1 + n.degree)
       .nodeLabel((n) => n.id)
@@ -190,6 +223,7 @@ export class GraphView {
     graph
       .d3Force('link')
       ?.distance((l: Link) => LINK_BASE_DISTANCE + LINK_RADIUS_FACTOR * (somaRadius(this.nodeOf(l.source)) + somaRadius(this.nodeOf(l.target))));
+    graph.d3Force('gravity', gravityForce());
 
     graph.lights(createLights());
 
@@ -200,14 +234,14 @@ export class GraphView {
 
     const composer = graph.postProcessingComposer();
     composer.setPixelRatio(pixelRatio);
-    composer.addPass(
-      new UnrealBloomPass(
-        new Vector2(this.container.clientWidth, this.container.clientHeight),
-        BLOOM.strength,
-        BLOOM.radius,
-        BLOOM.threshold,
-      ),
+    this.bloomPass = new UnrealBloomPass(
+      new Vector2(this.container.clientWidth, this.container.clientHeight),
+      BLOOM.strength,
+      BLOOM.radius,
+      BLOOM.threshold,
     );
+    this.bloomPass.enabled = this.look.bloom;
+    composer.addPass(this.bloomPass);
     // Applies the sRGB conversion after the bloom pass.
     composer.addPass(new OutputPass());
 
@@ -215,8 +249,8 @@ export class GraphView {
     // re-encoded to sRGB by OutputPass, which turns the dark background grey.
     // A scene background goes through colour management and stays exact.
     const scene = graph.scene();
-    scene.background = new Color(background);
-    scene.fog = new FogExp2(background, FOG_DEFAULT_DENSITY);
+    scene.background = new Color(this.look.background);
+    scene.fog = new FogExp2(this.look.background, FOG_DEFAULT_DENSITY);
 
     // Any interaction wakes the render loop; it pauses again once idle.
     for (const event of ['pointerdown', 'pointermove', 'wheel', 'touchstart']) {
@@ -320,7 +354,7 @@ export class GraphView {
     const core = new Sprite(look.core);
     core.scale.setScalar(radius * CORE_SCALE);
 
-    const label = new SpriteText(node.title, LABEL_HEIGHT, LABEL_COLOR);
+    const label = new SpriteText(node.title, LABEL_HEIGHT, this.look.label);
     label.fontSize = LABEL_FONT_PX;
     label.fontFace = 'Segoe UI, system-ui, sans-serif';
     label.fontWeight = '500';
@@ -340,14 +374,14 @@ export class GraphView {
 
   private paint(node: Node, look: NeuronLook): void {
     const dimmed = this.hovered !== null && node.id !== this.hovered && !this.neighbors.get(this.hovered)?.has(node.id);
-    const base = new Color(dimmed ? dimColor : this.nodeColor(node));
+    const base = new Color(dimmed ? this.look.dim : this.nodeColor(node));
     const firing = node.id === this.hovered;
 
     look.soma.color.copy(base);
     look.soma.emissive.copy(base);
     look.soma.emissiveIntensity = dimmed ? 0 : firing ? SOMA_GLOW * 2.2 : SOMA_GLOW;
 
-    look.dendrites.color.copy(base).lerp(DENDRITE_TINT, DENDRITE_SHADE);
+    look.dendrites.color.copy(base).lerp(this.look.dendriteTint, DENDRITE_SHADE);
     look.dendrites.emissive.copy(base);
     look.dendrites.emissiveIntensity = dimmed ? 0 : firing ? 0.4 : 0.16;
 
@@ -356,20 +390,19 @@ export class GraphView {
   }
 
   private nodeColor(node: Node | undefined): string {
-    if (!node) return rootColor;
-    if (node.unresolved) return unresolvedColor;
-    return this.colors.get(node.group) ?? rootColor;
+    if (!node) return ROOT_COLOR;
+    if (node.unresolved) return UNRESOLVED_COLOR;
+    return this.colors.get(node.group) ?? ROOT_COLOR;
   }
 
   private fibreColor(link: Link): string {
-    if (this.isLinkHighlighted(link)) return '#f4f4f5';
+    if (this.isLinkHighlighted(link)) return this.look.highlight;
     const source = this.nodesById.get(idOf(link.source) ?? '');
-    return '#' + new Color(this.nodeColor(source)).lerp(DENDRITE_TINT, FIBRE_SHADE).getHexString();
+    return '#' + new Color(this.nodeColor(source)).lerp(this.look.dendriteTint, FIBRE_SHADE).getHexString();
   }
 
   private assignColors(nodes: GraphNodeData[]): void {
-    const groups = [...new Set(nodes.filter((n) => !n.unresolved && n.group !== '').map((n) => n.group))].sort();
-    this.colors = new Map(groups.map((group, i) => [group, palette[i % palette.length]]));
+    this.colors = folderColors(nodes.filter((n) => !n.unresolved).map((n) => n.group));
   }
 
   private hover(node: Node | null): void {
@@ -433,6 +466,23 @@ export class GraphView {
 function somaRadius(node: Node | undefined): number {
   const degree = node?.degree ?? 0;
   return Math.min(SOMA_BASE_RADIUS + Math.sqrt(degree) * SOMA_DEGREE_RADIUS, SOMA_MAX_RADIUS);
+}
+
+/** Pulls every node gently towards the origin; orphans harder. */
+function gravityForce() {
+  let nodes: Node[] = [];
+  const force = (alpha: number) => {
+    for (const n of nodes) {
+      const k = (n.degree === 0 ? ORPHAN_GRAVITY : GRAVITY) * alpha;
+      n.vx = (n.vx ?? 0) - (n.x ?? 0) * k;
+      n.vy = (n.vy ?? 0) - (n.y ?? 0) * k;
+      n.vz = (n.vz ?? 0) - (n.z ?? 0) * k;
+    }
+  };
+  force.initialize = (all: Node[]) => {
+    nodes = all;
+  };
+  return force;
 }
 
 /** Dim fill plus a warm key light, so dendrites read as lit tissue. */

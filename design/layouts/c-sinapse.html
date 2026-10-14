@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>C — Sinapse</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .app { display: grid; grid-template-rows: 52px 1fr 64px; height: 100vh; }
+
+  /* Top: logo, open notes as stone tabs, command palette. */
+  .top { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--stone-0); }
+  .top .logo { width: 26px; height: 26px; }
+  .stones { display: flex; gap: 6px; flex: 1; }
+  .stone { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 9px; font-size: 13px; color: var(--text-2); background: var(--stone-2); border: 1px solid var(--line); }
+  .stone.on { color: var(--text); border-color: rgba(52, 211, 153, 0.45); box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.08); }
+  .cmd { display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-radius: 10px; background: var(--stone-2); border: 1px solid var(--line); color: var(--text-3); font-size: 13px; width: 300px; }
+  .cmd span:first-of-type { flex: 1; }
+
+  /* Middle: editor and live graph side by side, joined by a synapse divider. */
+  .split { display: grid; grid-template-columns: 1fr 6px 1fr; min-height: 0; }
+  .editor { overflow: hidden; padding: 44px 56px; background: var(--stone-1); }
+  .editor .prose { max-width: 620px; margin: 0 auto; }
+  .editor .wl { background: rgba(139, 124, 246, 0.12); border-radius: 4px; padding: 0 3px; border-bottom: none; }
+  .editor .wl.hot { background: rgba(52, 211, 153, 0.18); color: #6ee7b7; }
+  .divider { background: linear-gradient(var(--stone-0), var(--stone-3), var(--stone-0)); position: relative; }
+  .divider::after { content: ''; position: absolute; left: 1px; top: 46%; width: 4px; height: 40px; border-radius: 4px; background: var(--accent); }
+  .live { position: relative; background: radial-gradient(ellipse at 50% 50%, #1b1a24, #111113 70%); }
+  .live svg { width: 100%; height: 100%; display: block; }
+  .live .overlay { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .seg { display: flex; padding: 3px; background: rgba(17, 17, 19, 0.7); border: 1px solid var(--line); border-radius: 10px; }
+  .seg span { padding: 5px 10px; font-size: 12px; color: var(--text-3); border-radius: 8px; }
+  .seg span.on { background: var(--stone-3); color: var(--text); }
+  .depth { font-size: 12px; color: var(--text-2); display: flex; gap: 8px; align-items: center; }
+  .depth i { display: inline-block; width: 90px; height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--accent) 60%, var(--stone-3) 60%); }
+  .tooltip { position: absolute; left: 47%; top: 58%; padding: 10px 12px; width: 230px; font-size: 12px; }
+  .tooltip b { display: block; font-size: 13px; margin-bottom: 4px; }
+
+  /* Bottom: timeline of recently touched notes. */
+  .timeline { display: flex; align-items: center; gap: 0; padding: 0 20px; border-top: 1px solid var(--line); background: var(--stone-0); position: relative; }
+  .timeline::before { content: ''; position: absolute; left: 20px; right: 20px; top: 50%; height: 1px; background: var(--line-strong); }
+  .tick { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); }
+  .tick .dot { width: 10px; height: 10px; box-shadow: 0 0 0 4px var(--stone-0); }
+  .tick.now { color: var(--text); }
+  .tick.now .dot { width: 14px; height: 14px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <img class="logo" src="../icons/app-icon.svg" alt="">
+    <div class="stones">
+      <div class="stone on"><span class="dot" style="background:#34d399"></span>Grafo 3D</div>
+      <div class="stone"><span class="dot" style="background:#fb923c"></span>ADR 002 Índice em SQLite</div>
+      <div class="stone"><span class="dot" style="background:#c084fc"></span>Visão geral do projeto</div>
+      <div class="stone faint">+</div>
+    </div>
+    <div class="cmd"><svg class="icon" viewBox="0 0 24 24" style="width:15px"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Ir para nota ou comando</span><span class="kbd">Ctrl K</span></div>
+  </header>
+
+  <div class="split">
+    <section class="editor">
+      <div class="prose">
+        <h1>Grafo 3D</h1>
+        <p class="faint" style="font-size:13px">projeto · editado há 4 min</p>
+        <p>Cada nota vira um neurônio e cada ligação, uma fibra. Os dados vêm do índice descrito na <span class="wl">ADR 002 Índice em SQLite</span> e são relidos quando o cofre muda.</p>
+        <h2>Fluxo</h2>
+        <ul><li>Equilibra <code>repulsão</code>, <code>molas</code> e <code>gravidade</code></li><li>Segue a <span class="wl hot">Simulação de forças</span></li><li>Lê as ligações do <span class="wl">Índice SQLite</span></li></ul>
+        <p>Ver também <span class="wl">Desempenho do grafo</span>.</p>
+      </div>
+    </section>
+    <div class="divider"></div>
+    <section class="live">
+      <svg data-graph data-nodes="26" data-seed="5" data-spread="0.95" data-focus="50,50" data-labels="Simulação de forças|ADR 002|Índice SQLite|Visão geral|Desempenho|Diário|Watcher"></svg>
+      <div class="overlay">
+        <div class="seg"><span class="on">Vizinhança</span><span>Pasta</span><span>Cofre todo</span></div>
+        <div class="depth">Profundidade 2 <i></i></div>
+      </div>
+      <div class="tooltip glass"><b>Simulação de forças</b><span class="muted">Mencionado na linha 6 · 5 ligações</span></div>
+    </section>
+  </div>
+
+  <footer class="timeline">
+    <div class="tick"><span class="dot" style="background:#60a5fa"></span>Watcher · ontem</div>
+    <div class="tick"><span class="dot" style="background:#fb923c"></span>ADR 002 · 09:12</div>
+    <div class="tick"><span class="dot" style="background:#c084fc"></span>Visão geral · 10:40</div>
+    <div class="tick"><span class="dot" style="background:#60a5fa"></span>Índice SQLite · 11:05</div>
+    <div class="tick now"><span class="dot" style="background:#34d399"></span>Grafo 3D · agora</div>
+  </footer>
+</div>
+<script src="graph.js"></script>
+</body>
+</html>
