@@ -81,6 +81,13 @@ const LABEL_HEIGHT = 2.4;
 // very large textures (one per note).
 const LABEL_FONT_PX = 72;
 
+// Layout forces (d3 defaults: charge -30, link distance 30).
+const CHARGE_BASE = 90;
+const CHARGE_PER_RADIUS = 25;
+const CHARGE_MAX_DISTANCE = 800;
+const LINK_BASE_DISTANCE = 45;
+const LINK_RADIUS_FACTOR = 4;
+
 const WARMUP_TICKS = 120;
 const COOLDOWN_MS = 3000;
 // Delay before the first framing: enough for the graph to apply the data
@@ -173,6 +180,17 @@ export class GraphView {
         this.fit();
       });
 
+    // Spread the layout so neurons (with their dendrites) do not crowd each
+    // other: stronger repulsion for bigger neurons, and links long enough
+    // to keep the two cell bodies apart.
+    graph
+      .d3Force('charge')
+      ?.strength((n: Node) => -(CHARGE_BASE + CHARGE_PER_RADIUS * somaRadius(n)))
+      .distanceMax(CHARGE_MAX_DISTANCE);
+    graph
+      .d3Force('link')
+      ?.distance((l: Link) => LINK_BASE_DISTANCE + LINK_RADIUS_FACTOR * (somaRadius(this.nodeOf(l.source)) + somaRadius(this.nodeOf(l.target))));
+
     graph.lights(createLights());
 
     const renderer = graph.renderer();
@@ -205,7 +223,8 @@ export class GraphView {
       this.container.addEventListener(event, () => this.wake(), { passive: true });
     }
 
-    this.graph = graph;  }
+    this.graph = graph;
+  }
 
   /** Stops all rendering while the graph is not on screen. */
   hide(): void {
@@ -287,7 +306,7 @@ export class GraphView {
 
   /** A neuron: glowing soma, organic dendrites and a dim title below. */
   private nodeObject(node: Node): Group {
-    const radius = Math.min(SOMA_BASE_RADIUS + Math.sqrt(node.degree) * SOMA_DEGREE_RADIUS, SOMA_MAX_RADIUS);
+    const radius = somaRadius(node);
     const shape = buildNeuron(hash(node.id), radius);
     const look: NeuronLook = {
       soma: new MeshStandardMaterial({ roughness: 0.55, metalness: 0 }),
@@ -381,6 +400,10 @@ export class GraphView {
     window.setTimeout(() => this.onOpen(node), 450);
   }
 
+  private nodeOf(end: Link['source']): Node | undefined {
+    return typeof end === 'object' ? end : this.nodesById.get(idOf(end) ?? '');
+  }
+
   private isLinkHighlighted(link: Link): boolean {
     if (!this.hovered) return false;
     return idOf(link.source) === this.hovered || idOf(link.target) === this.hovered;
@@ -404,6 +427,12 @@ export class GraphView {
   private isVisible(): boolean {
     return this.container.offsetParent !== null;
   }
+}
+
+/** Soma radius: grows with the square root of the link count, capped. */
+function somaRadius(node: Node | undefined): number {
+  const degree = node?.degree ?? 0;
+  return Math.min(SOMA_BASE_RADIUS + Math.sqrt(degree) * SOMA_DEGREE_RADIUS, SOMA_MAX_RADIUS);
 }
 
 /** Dim fill plus a warm key light, so dendrites read as lit tissue. */
