@@ -26,6 +26,11 @@ import {
   Sprite,
   SpriteMaterial,
   Vector2,
+  type Curve,
+  MeshLambertMaterial,
+  SphereGeometry,
+  TubeGeometry,
+  type Vector3,
 } from 'three';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -36,6 +41,8 @@ import { buildNeuron, hash } from './neuron';
 
 type Node = NodeObject & GraphNodeData;
 type Link = LinkObject<Node>;
+/** A link as three-forcegraph decorates it once drawn. */
+type RenderedLink = Link & { __lineObj?: Mesh; __curve?: Curve<Vector3> | null };
 
 // The default export is not generic over node/link types; narrow it once here.
 const Graph3D = ForceGraph3D as unknown as new (element: HTMLElement, config?: ConfigOptions) => ForceGraph3DInstance<Node, Link>;
@@ -78,8 +85,12 @@ const FIBRE_CURVATURE = 0.2;
 // Pulses run only on the fibres of the hovered neuron: constant pulses on
 // every fibre kept the GPU busy redrawing an otherwise still scene.
 const PULSES_PER_FIBRE = 2;
-const PULSE_SPEED = 0.004;
+const PULSE_SPEED = 0.004; // fraction of the link per frame
 const PULSE_WIDTH = 0.55;
+const PULSE_RESOLUTION = 8;
+// three-forcegraph's tube settings, reproduced when restyling links on hover.
+const TUBE_SEGMENTS = 30;
+const LINK_RESOLUTION = 6;
 
 // Exponential fog: distant neurons fade into the background. The density is
 // the theme's fogScale divided by the graph's radius, so a large vault (seen
@@ -151,6 +162,11 @@ export class GraphView {
   private look: SceneLook = SCENE_LOOKS[currentTheme()];
   private bloomPass: UnrealBloomPass | null = null;
   private framedWidth = 0;
+  private readonly fibreMaterials = new Map<string, MeshLambertMaterial>();
+  private readonly pulseMaterials = new Map<string, MeshLambertMaterial>();
+  private pulseGeometry: SphereGeometry | null = null;
+  private pulses: { link: RenderedLink; group: Group }[] = [];
+  private pulseFrame = 0;
 
   constructor(
     private readonly container: HTMLElement,
@@ -203,13 +219,11 @@ export class GraphView {
       .linkColor((l) => this.fibreColor(l))
       .linkOpacity(FIBRE_OPACITY)
       .linkWidth((l) => (this.isLinkHighlighted(l) ? FIBRE_WIDTH * 2.2 : FIBRE_WIDTH))
-      .linkResolution(6)
+      .linkResolution(LINK_RESOLUTION)
       // Pulses: faint signals running from source to target.
-      .linkDirectionalParticles((l) => (this.isLinkHighlighted(l) ? PULSES_PER_FIBRE : 0))
-      .linkDirectionalParticleSpeed(PULSE_SPEED)
-      .linkDirectionalParticleWidth((l) => (this.isLinkHighlighted(l) ? PULSE_WIDTH * 1.8 : PULSE_WIDTH))
-      .linkDirectionalParticleColor((l) => this.nodeColor(this.nodesById.get(idOf(l.source) ?? '')))
-      .linkDirectionalParticleResolution(8)
+      // Pulses are drawn by the view (see updatePulses), not the library:
+      // switching them through accessors re-created every link on hover.
+      .linkDirectionalParticles(0)
       .onNodeHover((n) => this.hover(n))
       .onNodeClick((n) => this.click(n))
       // Lay out synchronously before the first frame, so the graph is
@@ -340,6 +354,8 @@ export class GraphView {
     }
     for (const look of this.looks.values()) disposeLook(look);
     this.looks.clear();
+    this.clearPulses();
+    this.hovered = null;
 
     const nodes = data.nodes.map((n) => ({ ...n }));
     this.nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -424,19 +440,124 @@ export class GraphView {
   private hover(node: Node | null): void {
     const id = node?.id ?? null;
     if (id === this.hovered) return;
+    const previous = this.hovered;
     this.hovered = id;
     this.container.style.cursor = node ? 'pointer' : 'grab';
     for (const [nodeId, look] of this.looks) {
       const target = this.nodesById.get(nodeId);
       if (target) this.paint(target, look);
     }
-    // Re-assigning the accessors makes the graph re-evaluate them.
+    this.restyleLinks(previous, id);
+    this.updatePulses();
+  }
+
+  /**
+   * Applies the hover look to the links of the neurons entering or leaving
+   * hover, exactly as the library would (same material and tube), but only to
+   * those links. Re-setting linkColor/linkWidth instead made the library
+   * re-create and re-tube every link: ~150 ms per hover on 859 links.
+   */
+  private restyleLinks(previous: string | null, current: string | null): void {
+    if (!this.graph) return;
+    for (const link of this.graph.graphData().links as RenderedLink[]) {
+      const source = idOf(link.source);
+      const target = idOf(link.target);
+      const touched = [previous, current].some((id) => id !== null && (id === source || id === target));
+      if (!touched || !link.__lineObj) continue;
+
+      link.__lineObj.material = this.fibreMaterial(this.fibreColor(link));
+      if (link.__curve) {
+        // Same rounding and resolution as three-forcegraph's tube links.
+        const radius = Math.ceil(this.fibreWidth(link) * 10) / 10 / 2;
+        link.__lineObj.geometry.dispose();
+        link.__lineObj.geometry = new TubeGeometry(link.__curve, TUBE_SEGMENTS, radius, LINK_RESOLUTION, false);
+      }
+    }
+  }
+
+  /** The library's link material for a colour: Lambert, translucent, no depth write. */
+  private fibreMaterial(color: string): MeshLambertMaterial {
+    let material = this.fibreMaterials.get(color);
+    if (!material) {
+      material = new MeshLambertMaterial({ color: new Color(color), transparent: FIBRE_OPACITY < 1, opacity: FIBRE_OPACITY, depthWrite: FIBRE_OPACITY >= 1 });
+      this.fibreMaterials.set(color, material);
+    }
+    return material;
+  }
+
+  private fibreWidth(link: Link): number {
+    return this.isLinkHighlighted(link) ? FIBRE_WIDTH * 2.2 : FIBRE_WIDTH;
+  }
+
+  /**
+   * Pulses on the hovered neuron's links, built and moved like the library's
+   * directional particles: PULSES_PER_FIBRE spheres per link, spaced evenly,
+   * advancing PULSE_SPEED of the link per frame.
+   */
+  private updatePulses(): void {
+    this.clearPulses();
     const graph = this.graph;
-    graph
-      ?.linkColor(graph.linkColor())
-      .linkWidth(graph.linkWidth())
-      .linkDirectionalParticleWidth(graph.linkDirectionalParticleWidth())
-      .linkDirectionalParticles(graph.linkDirectionalParticles());
+    if (!graph || this.hovered === null) return;
+
+    const radius = Math.ceil(PULSE_WIDTH * 1.8 * 10) / 10 / 2;
+    this.pulseGeometry ??= new SphereGeometry(radius, PULSE_RESOLUTION, PULSE_RESOLUTION);
+    for (const link of graph.graphData().links as RenderedLink[]) {
+      if (!this.isLinkHighlighted(link)) continue;
+      const material = this.pulseMaterial(this.nodeColor(this.nodesById.get(idOf(link.source) ?? '')));
+      const group = new Group();
+      for (let i = 0; i < PULSES_PER_FIBRE; i++) {
+        const photon = new Mesh(this.pulseGeometry, material);
+        photon.userData.progress = i / PULSES_PER_FIBRE;
+        group.add(photon);
+      }
+      graph.scene().add(group);
+      this.pulses.push({ link, group });
+    }
+    this.movePulses(false);
+    if (!this.pulseFrame) this.pulseFrame = requestAnimationFrame(this.animatePulses);
+  }
+
+  private animatePulses = (): void => {
+    if (this.pulses.length === 0) {
+      this.pulseFrame = 0;
+      return;
+    }
+    this.movePulses(true);
+    this.pulseFrame = requestAnimationFrame(this.animatePulses);
+  };
+
+  private movePulses(advance: boolean): void {
+    for (const { link, group } of this.pulses) {
+      const source = typeof link.source === 'object' ? link.source : undefined;
+      const target = typeof link.target === 'object' ? link.target : undefined;
+      for (const photon of group.children) {
+        if (advance) photon.userData.progress = (photon.userData.progress + PULSE_SPEED) % 1;
+        const t: number = photon.userData.progress;
+        if (link.__curve) photon.position.copy(link.__curve.getPoint(t));
+        else if (source && target) {
+          photon.position.set(
+            (source.x ?? 0) + ((target.x ?? 0) - (source.x ?? 0)) * t,
+            (source.y ?? 0) + ((target.y ?? 0) - (source.y ?? 0)) * t,
+            (source.z ?? 0) + ((target.z ?? 0) - (source.z ?? 0)) * t,
+          );
+        }
+      }
+    }
+  }
+
+  private clearPulses(): void {
+    for (const { group } of this.pulses) group.removeFromParent();
+    this.pulses = [];
+  }
+
+  /** The library's particle material: Lambert, opacity 3 × link opacity. */
+  private pulseMaterial(color: string): MeshLambertMaterial {
+    let material = this.pulseMaterials.get(color);
+    if (!material) {
+      material = new MeshLambertMaterial({ color: new Color(color), transparent: true, opacity: FIBRE_OPACITY * 3 });
+      this.pulseMaterials.set(color, material);
+    }
+    return material;
   }
 
   private click(node: Node): void {
