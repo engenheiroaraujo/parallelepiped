@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>parallelepiped</title>
+</head>
+<body>
+<section id="welcome" class="welcome" hidden>
+    <h1>parallelepiped</h1>
+    <p>Um cofre é uma pasta comum com notas em Markdown.</p>
+    <button id="welcome-open" class="primary">Abrir pasta como cofre</button>
+    <h2>Recentes</h2>
+    <ul id="recent-vaults" class="plain-list"></ul>
+</section>
+
+<div id="workspace" class="workspace" hidden>
+    <aside class="sidebar">
+        <header class="sidebar-header">
+            <strong id="vault-name" class="vault-name"></strong>
+            <button id="new-note" class="icon" title="Nova nota (Ctrl+N)">＋</button>
+            <button id="open-vault" class="icon" title="Abrir outro cofre">⇄</button>
+        </header>
+        <input id="search" class="search" type="search" placeholder="Buscar (Ctrl+Shift+F)" autocomplete="off"/>
+        <div id="search-results" class="search-results" hidden></div>
+        <nav id="tree" class="tree"></nav>
+    </aside>
+
+    <main class="main">
+        <div class="tabs">
+            <button id="tab-editor" class="tab active">Editor</button>
+            <button id="tab-graph" class="tab" title="Ctrl+G">Grafo 3D</button>
+            <div id="note-bar" class="note-bar" hidden>
+                <input id="note-title" class="note-title" spellcheck="false" title="Renomear nota"/>
+                <span id="save-status" class="save-status"></span>
+                <button id="delete-note" class="icon danger" title="Mover para a lixeira">🗑</button>
+            </div>
+        </div>
+
+        <section id="editor-view" class="view">
+            <div id="editor" class="editor"></div>
+            <p id="editor-empty" class="editor-empty">Escolha uma nota na barra lateral ou crie uma com Ctrl+N.</p>
+        </section>
+
+        <section id="graph-view" class="view" hidden>
+            <div id="graph" class="graph"></div>
+            <p class="graph-hint">Arraste para girar · roda do mouse para zoom · botão direito para mover · clique para abrir</p>
+        </section>
+    </main>
+
+    <aside class="backlinks-panel">
+        <h3>Backlinks</h3>
+        <ul id="backlinks" class="plain-list"></ul>
+    </aside>
+</div>
+
+<dialog id="dialog" class="dialog">
+    <form method="dialog">
+        <p id="dialog-title"></p>
+        <input id="dialog-input" autocomplete="off" spellcheck="false"/>
+        <menu>
+            <button value="cancel" formnovalidate>Cancelar</button>
+            <button value="ok" class="primary">OK</button>
+        </menu>
+    </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="./src/main.ts" type="module"></script>
+</body>
+</html>
