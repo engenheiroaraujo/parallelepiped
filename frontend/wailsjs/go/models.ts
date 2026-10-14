@@ -110,6 +110,32 @@ export namespace dto {
 		    return a;
 		}
 	}
+	export class ImportResultResponse {
+	    index_note: string;
+	    units: number;
+	    created: number;
+	    updated: number;
+	    unchanged: number;
+	    removed: number;
+	    skipped: string[];
+	    kept: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportResultResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index_note = source["index_note"];
+	        this.units = source["units"];
+	        this.created = source["created"];
+	        this.updated = source["updated"];
+	        this.unchanged = source["unchanged"];
+	        this.removed = source["removed"];
+	        this.skipped = source["skipped"];
+	        this.kept = source["kept"];
+	    }
+	}
 	export class NoteResponse {
 	    path: string;
 	    title: string;

@@ -1,7 +1,7 @@
 // Application controller: wires the views to the backend calls.
 
 import './style.css';
-import { indexApi, notesApi, vaultApi, vaultEvents, type VaultInfo } from './api/api';
+import { brainApi, brainEvents, indexApi, notesApi, vaultApi, vaultEvents, type ImportResult, type VaultInfo } from './api/api';
 import { AppError, describeError } from './api/client';
 import { askText, byId, confirmAction, debounce, h, toast } from './ui/dom';
 import { Editor } from './views/editor';
@@ -56,6 +56,7 @@ class App {
     byId('open-vault').addEventListener('click', () => void this.chooseVault());
     byId('welcome-open').addEventListener('click', () => void this.chooseVault());
     byId('new-note').addEventListener('click', () => void this.createNote());
+    byId('import-project').addEventListener('click', () => void this.importProject());
     byId('delete-note').addEventListener('click', () => void this.deleteNote());
     byId('tab-editor').addEventListener('click', () => this.showView('editor'));
     byId('tab-graph').addEventListener('click', () => this.showView('graph'));
@@ -273,6 +274,31 @@ class App {
     }
   }
 
+  /** Maps the vault's source code into linked notes and shows them in the graph. */
+  private async importProject(): Promise<void> {
+    if (!this.vault) return;
+    const ok = await confirmAction(
+      'Mapear o código deste cofre em notas? Elas serão criadas em docs/cerebro/ ' +
+        '(dentro da pasta do projeto). Notas suas nunca são sobrescritas.',
+    );
+    if (!ok) return;
+
+    const button = byId<HTMLButtonElement>('import-project');
+    button.disabled = true;
+    const stop = brainEvents.onProgress((done, total) => toast(`Mapeando o projeto… ${done}/${total}`, 'info'));
+    try {
+      const result = await brainApi.importProject();
+      await this.refreshTree();
+      toast(importSummary(result), 'info');
+      this.showView('graph');
+    } catch (err) {
+      toast(describeError(err));
+    } finally {
+      stop();
+      button.disabled = false;
+    }
+  }
+
   private async runSearch(query: string): Promise<void> {
     if (!query.trim()) {
       this.search.hide();
@@ -317,6 +343,17 @@ function covers(changed: string, note: string): boolean {
   const c = changed.toLowerCase();
   const n = note.toLowerCase();
   return c === '' || c === n || n.startsWith(c + '/');
+}
+
+function importSummary(r: ImportResult): string {
+  const parts = [`${r.units} pastas de código mapeadas`];
+  if (r.created) parts.push(`${r.created} notas criadas`);
+  if (r.updated) parts.push(`${r.updated} atualizadas`);
+  if (r.removed) parts.push(`${r.removed} removidas`);
+  if (!r.created && !r.updated && !r.removed) parts.push('nada mudou desde a última importação');
+  if (r.skipped.length) parts.push(`${r.skipped.length} ignoradas por já existirem notas suas no lugar`);
+  if (r.kept.length) parts.push(`${r.kept.length} mantidas por terem anotações suas`);
+  return parts.join(' · ') + '.';
 }
 
 function titleOf(path: string): string {

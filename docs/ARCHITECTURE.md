@@ -15,6 +15,7 @@ internal/
     notes/                 ler, salvar, criar, renomear e apagar notas (.md)
     index/                 índice SQLite: links, backlinks, tags, busca FTS5, grafo
     watcher/               observa o cofre (fsnotify) e reindexa mudanças feitas fora do app
+    brain/                 importação estrutural: mapeia o código do cofre em notas (docs/cerebro)
       handler/             struct ligada ao frontend pelo Wails (transporte)
       service/             casos de uso
       model/               entidades e regras puras (parse de [[links]], grafo)
@@ -28,6 +29,7 @@ internal/
     errors/                categorias e catálogo único de erros sentinela
     log/                   logger estruturado (slog, JSON em arquivo)
     validation/            acumulador de erros por campo
+    vaultpath/             regra única de pastas ignoradas (ocultas, vendor, node_modules)
 frontend/                  TypeScript + Vite, CodeMirror 6, 3d-force-graph
 tools/makehelp/            imprime os alvos do Makefile (make help)
 ```
@@ -51,6 +53,9 @@ simples — nunca importando o handler ou o model de outro módulo:
 - `vault/service.Watcher` — ao abrir um cofre, o vault para o watcher anterior antes de
   reconstruir o índice e começa a observar a nova pasta depois.
 - `watcher/service.Indexer` — o watcher atualiza o índice (`Upsert`/`Remove`/`Rebuild`).
+- `brain/service.Notes` — a importação lê, grava e apaga notas com strings simples; o
+  adaptador `brainNotes` no `main.go` repassa ao serviço de notas, para que o watcher
+  reconheça essas escritas como do próprio app.
 
 ## Adaptações da arquitetura para desktop
 
@@ -110,6 +115,31 @@ os backlinks da nota aberta e o grafo visível, e recarrega a nota aberta se ela
 mudou e não há edição pendente (se sumiu, fecha o editor com um aviso).
 
 O watcher é encerrado no `OnShutdown` do Wails, antes de o índice ser fechado.
+
+### Importação estrutural do projeto (🧠)
+
+Sem IA e sem rede: `brain/repository.Analyzer` percorre o cofre como um projeto de
+código (ignora `vendor`, `node_modules`, ocultas, `dist`, `build`, `bin`,
+`testdata`, `wailsjs` e o próprio `docs/cerebro`). Cada pasta com código vira uma
+unidade; em Go lê pacote, doc, símbolos exportados e imports internos ao módulo
+(`go/parser`); em TS/JS resolve imports relativos.
+
+`brain/model` gera, de forma determinística, uma nota-índice
+(`docs/cerebro/<projeto>.md`), uma nota-hub por módulo (`docs/cerebro/<módulo>/Módulo
+<módulo>.md`, o módulo é a primeira pasta que não é invólucro como `internal`,
+`modules`, `pkg`, `src`) e uma nota por unidade, com `[[links]]` de dependência nos
+dois sentidos. O título da unidade é o menor sufixo único do caminho
+(`vault.service`), sem colidir com notas existentes.
+
+Regras de segurança na reimportação:
+
+- notas geradas levam `gerado-por: parallelepiped` no front matter; uma nota sem
+  essa marca **nunca** é sobrescrita (é reportada como ignorada);
+- a seção `## Minhas anotações` é do usuário e sobrevive a toda reimportação;
+- conteúdo idêntico não é regravado; notas geradas cuja pasta sumiu são
+  removidas (para `.trash/`), exceto se tiverem texto do usuário.
+
+O progresso vai ao frontend pelo evento `brain:progress` (`{done, total}`).
 
 ### Notas apagadas
 

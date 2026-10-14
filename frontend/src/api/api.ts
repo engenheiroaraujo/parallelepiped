@@ -4,6 +4,7 @@
 import * as Vault from '../../wailsjs/go/handler/Vault';
 import * as Notes from '../../wailsjs/go/handler/Notes';
 import * as Index from '../../wailsjs/go/handler/Index';
+import * as Brain from '../../wailsjs/go/handler/Brain';
 import type { dto } from '../../wailsjs/go/models';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { call } from './client';
@@ -15,6 +16,7 @@ export type GraphData = dto.GraphResponse;
 export type GraphNodeData = dto.GraphNode;
 export type Backlink = dto.BacklinkItem;
 export type SearchHit = dto.SearchHitItem;
+export type ImportResult = dto.ImportResultResponse;
 
 export const vaultApi = {
   choose: () => call(Vault.Choose()),
@@ -35,6 +37,22 @@ export const indexApi = {
   graph: () => call(Index.Graph()),
   backlinks: async (path: string) => (await call(Index.Backlinks(path))).backlinks ?? [],
   search: async (query: string) => (await call(Index.Search(query, 0))).hits ?? [],
+};
+
+export const brainApi = {
+  /** Maps the code of the open vault into notes under docs/cerebro. */
+  importProject: () => call(Brain.ImportProject()),
+};
+
+/** Payload of the "brain:progress" event (brain/dto.ImportProgress). */
+interface ImportProgress {
+  done: number;
+  total: number;
+}
+
+export const brainEvents = {
+  onProgress: (callback: (done: number, total: number) => void): (() => void) =>
+    EventsOn('brain:progress', (payload: ImportProgress) => callback(payload.done, payload.total)),
 };
 
 /** Payload of the "vault:changed" event (watcher/dto.VaultChanged). */

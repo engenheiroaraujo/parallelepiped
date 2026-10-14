@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
+	brainhandler "parallelepiped/internal/modules/brain/handler"
+	brainrepository "parallelepiped/internal/modules/brain/repository"
+	brainservice "parallelepiped/internal/modules/brain/service"
 	indexhandler "parallelepiped/internal/modules/index/handler"
 	indexrepository "parallelepiped/internal/modules/index/repository"
 	indexservice "parallelepiped/internal/modules/index/service"
@@ -34,6 +38,7 @@ import (
 	watcherservice "parallelepiped/internal/modules/watcher/service"
 	"parallelepiped/internal/platform/config"
 	"parallelepiped/internal/platform/desktop"
+	errs "parallelepiped/internal/platform/errors"
 	applog "parallelepiped/internal/platform/log"
 	"parallelepiped/migrations"
 )
@@ -97,6 +102,8 @@ func run() error {
 	)
 	// Notes write through the watcher so it recognises the app's own saves.
 	notes := notesservice.New(notesrepository.FileRepository{}, vaults, watcher)
+	// The project import writes through the notes service for the same reason.
+	brain := brainservice.New(brainrepository.Analyzer{}, vaults, brainNotes{notes}, brainhandler.NewNotifier(runtime))
 
 	err = wails.Run(&options.App{
 		Title:            "parallelepiped",
@@ -112,12 +119,39 @@ func run() error {
 			vaulthandler.NewVault(runtime, vaults),
 			noteshandler.NewNotes(runtime, notes),
 			indexhandler.NewIndex(runtime, index),
+			brainhandler.NewBrain(runtime, brain),
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("run app: %w", err)
 	}
 	return nil
+}
+
+// brainNotes adapts the notes service to the plain-string contract of the
+// project import, so the brain module does not depend on notes types.
+type brainNotes struct {
+	svc *notesservice.Service
+}
+
+func (n brainNotes) Read(ctx context.Context, path string) (string, bool, error) {
+	note, err := n.svc.Read(ctx, path)
+	if errors.Is(err, errs.ErrNoteNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return note.Content, true, nil
+}
+
+func (n brainNotes) Save(ctx context.Context, path, content string) error {
+	_, err := n.svc.Save(ctx, path, content)
+	return err
+}
+
+func (n brainNotes) Delete(ctx context.Context, path string) error {
+	return n.svc.Delete(ctx, path)
 }
 
 // indexFileName derives a stable database file name from the vault folder.
