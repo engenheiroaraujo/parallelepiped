@@ -13,6 +13,7 @@ import (
 
 	"parallelepiped/internal/modules/vault/model"
 	errs "parallelepiped/internal/platform/errors"
+	"parallelepiped/internal/platform/vaultpath"
 )
 
 // TreeReader reads the folder structure of a vault.
@@ -31,7 +32,7 @@ func (TreeReader) IsDir(ctx context.Context, root string) (bool, error) {
 }
 
 // Tree returns folders and .md notes under root, folders first, each level
-// sorted by name. Hidden entries are skipped.
+// sorted by name. Excluded entries (see vaultpath) are skipped.
 func (TreeReader) Tree(ctx context.Context, root string) (model.TreeNode, error) {
 	node := model.TreeNode{Name: filepath.Base(root), Path: "", IsDir: true}
 	if err := readLevel(ctx, root, "", &node); err != nil {
@@ -53,7 +54,7 @@ func readLevel(ctx context.Context, root, rel string, parent *model.TreeNode) er
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
+		if vaultpath.IsExcludedName(name) {
 			continue
 		}
 		childPath := path.Join(rel, name)

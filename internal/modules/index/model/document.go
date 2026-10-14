@@ -64,14 +64,16 @@ func TitleFromPath(p string) string {
 	return strings.TrimSuffix(base, path.Ext(base))
 }
 
-// FolderOf returns the top-level folder of p, or "" for notes at the root.
-// It is the grouping used to colour the graph.
+// FolderOf returns the folder that directly contains p, or "" for notes at
+// the root. It is the grouping used to colour the graph: the immediate
+// folder tells notes apart even when a whole vault lives under one top-level
+// folder such as "docs".
 func FolderOf(p string) string {
-	first, _, found := strings.Cut(p, "/")
-	if !found {
+	dir := path.Dir(p)
+	if dir == "." {
 		return ""
 	}
-	return first
+	return dir
 }
 
 // LinkKey normalises a link target or note path for resolution: lower case,

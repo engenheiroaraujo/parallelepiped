@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"parallelepiped/internal/modules/index/model"
+	"parallelepiped/internal/platform/vaultpath"
 )
 
 // maxIndexedFileBytes skips huge files that are unlikely to be notes.
@@ -18,7 +19,8 @@ const maxIndexedFileBytes = 10 << 20
 type Scanner struct{}
 
 // Scan walks root and returns its .md files with slash-separated relative
-// paths. Hidden files and folders (".git", ".trash", ...) are skipped.
+// paths. Excluded entries (hidden ones and dependency folders, see
+// vaultpath) are skipped.
 func (Scanner) Scan(ctx context.Context, root string) ([]model.SourceFile, error) {
 	var files []model.SourceFile
 	err := filepath.WalkDir(root, func(abs string, entry fs.DirEntry, err error) error {
@@ -28,7 +30,7 @@ func (Scanner) Scan(ctx context.Context, root string) ([]model.SourceFile, error
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if abs != root && strings.HasPrefix(entry.Name(), ".") {
+		if abs != root && vaultpath.IsExcludedName(entry.Name()) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"parallelepiped/internal/platform/vaultpath"
 )
 
 // DebounceDelay is how long a path must stay quiet before it is re-indexed.
@@ -33,19 +35,11 @@ type Change struct {
 	Folder bool
 }
 
-// IsHidden reports whether any segment of the relative path starts with a
-// dot (".git", ".trash", ".obsidian", ...). The vault root itself ("") is not
-// hidden.
+// IsHidden reports whether the relative path is outside the watched notes:
+// any segment hidden (".git", ".trash", ".obsidian", ...) or a dependency
+// folder (see vaultpath). The vault root itself ("") is not hidden.
 func IsHidden(relPath string) bool {
-	if relPath == "" {
-		return false
-	}
-	for _, segment := range strings.Split(relPath, "/") {
-		if strings.HasPrefix(segment, ".") {
-			return true
-		}
-	}
-	return false
+	return vaultpath.IsExcluded(relPath)
 }
 
 // IsNote reports whether a relative file path is an indexed note: a visible

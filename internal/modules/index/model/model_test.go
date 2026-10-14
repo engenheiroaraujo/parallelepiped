@@ -39,7 +39,7 @@ func TestParseTags(t *testing.T) {
 
 func TestParseDocument(t *testing.T) {
 	doc := ParseDocument(SourceFile{Path: "Area/Sub/Note One.md", Content: "[[x]]"})
-	if doc.Title != "Note One" || doc.Folder != "Area" || len(doc.Links) != 1 {
+	if doc.Title != "Note One" || doc.Folder != "Area/Sub" || len(doc.Links) != 1 {
 		t.Fatalf("unexpected document: %+v", doc)
 	}
 	if root := ParseDocument(SourceFile{Path: "Root.md"}); root.Folder != "" {
