@@ -1,32 +1,37 @@
-// 3D graph view. Drag rotates the sphere of notes (orbit controls), the
-// wheel zooms, right-drag pans, clicking a node opens it.
+// 3D graph view, styled as a field of neurons. Drag rotates it (orbit
+// controls), the wheel zooms, right-drag pans, clicking a node opens it.
+//
+// Each note is a neuron: a lumpy cell body glowing from within, in its
+// folder's colour, with organic dendrites (see neuron.ts). Links are fibres
+// tinted by their source neuron, with faint pulses running towards the
+// target. Fog fades distant neurons into the dark background for depth.
 //
 // Rendering quality: the canvas is rendered above the screen's pixel ratio
-// (supersampling) with antialiasing, nodes are lit physically based spheres,
-// links are tubes instead of 1px lines and a soft bloom pass adds glow.
+// (supersampling) with antialiasing, and a bloom pass makes the cell bodies
+// glow. Labels stay under the bloom threshold so they remain crisp.
 
 import ForceGraph3D, { type ConfigOptions, type ForceGraph3DInstance, type LinkObject, type NodeObject } from '3d-force-graph';
 import SpriteText from 'three-spritetext';
 import {
   ACESFilmicToneMapping,
+  AdditiveBlending,
   AmbientLight,
+  type BufferGeometry,
+  CanvasTexture,
   Color,
   DirectionalLight,
+  FogExp2,
   Group,
-  HemisphereLight,
   Mesh,
   MeshStandardMaterial,
-  type Object3D,
-  SphereGeometry,
+  Sprite,
+  SpriteMaterial,
   Vector2,
-  Vector3,
 } from 'three';
-import { helixGeometry, helixLength, turnsFor } from './helix';
-
-type Coords = { x: number; y: number; z: number };
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { GraphData, GraphNodeData } from '../api/api';
+import { buildNeuron, hash } from './neuron';
 
 type Node = NodeObject & GraphNodeData;
 type Link = LinkObject<Node>;
@@ -34,45 +39,69 @@ type Link = LinkObject<Node>;
 // The default export is not generic over node/link types; narrow it once here.
 const Graph3D = ForceGraph3D as unknown as new (element: HTMLElement, config?: ConfigOptions) => ForceGraph3DInstance<Node, Link>;
 
+// Folder colours (the same scheme as before), one per top-level folder.
 const palette = ['#a855f7', '#ef4444', '#f97316', '#eab308', '#10b981', '#3b82f6', '#ec4899', '#14b8a6', '#84cc16', '#f43f5e'];
 const rootColor = '#a1a1aa';
 const unresolvedColor = '#52525b';
-const dimColor = '#3a3a40';
+const dimColor = '#2c2c32';
 const background = '#1e1e1e';
 
-// Links are drawn as DNA-like double helices: light grey strands that read
-// clearly on the dark background, with dimmer rungs between them.
-const LINK_COLOR = '#a8a8b0';
-const strandMaterial = linkMaterial(LINK_COLOR, 0.15);
-const rungMaterial = linkMaterial('#6e6e7a', 0.1);
-const strandHighlight = linkMaterial('#f4f4f5', 0.45);
-const rungHighlight = linkMaterial('#b8b0ff', 0.4);
+// Neurons.
+// Like Obsidian, a note with more links is bigger: the radius grows with the
+// square root of its link count, capped so hubs do not swallow the view.
+const SOMA_BASE_RADIUS = 1.2;
+const SOMA_DEGREE_RADIUS = 0.9;
+const SOMA_MAX_RADIUS = 12;
+const SOMA_GLOW = 0.35; // emissive intensity of the cell body
+const DENDRITE_SHADE = 0.55; // how far dendrites darken towards DENDRITE_TINT
+const DENDRITE_TINT = new Color('#2a201c');
+const CORE_SCALE = 2.4; // inner glow diameter, in soma radii
+const CORE_OPACITY = 0.3;
 
-const NODE_REL_SIZE = 4;
+// Fibres between neurons.
+const FIBRE_SHADE = 0.45;
+const FIBRE_OPACITY = 0.6;
+const FIBRE_WIDTH = 0.22;
+const FIBRE_CURVATURE = 0.2;
+const PULSES_PER_FIBRE = 1;
+const PULSE_SPEED = 0.004;
+const PULSE_WIDTH = 0.55;
+
+// Exponential fog density; distant neurons fade into the background.
+const FOG_DENSITY = 0.0028;
+
+// Labels: dim enough to stay under the bloom threshold.
+const LABEL_COLOR = '#9a9aa4';
+const LABEL_HEIGHT = 2.4;
+// Label texture resolution in px; higher means sharper text when zoomed in.
+const LABEL_FONT_PX = 160;
+
 const WARMUP_TICKS = 120;
 const COOLDOWN_MS = 3000;
 // Delay before the first framing: enough for the graph to apply the data
 // and run the warm-up ticks.
 const FIRST_FIT_DELAY_MS = 300;
 
-// Render at twice the screen density (capped) so edges and text stay crisp.
+// Render at twice the screen density (capped) so fibres and text stay crisp.
 const SUPERSAMPLE = 2;
 const MAX_PIXEL_RATIO = 3;
 
-// Label texture resolution in px; higher means sharper text when zoomed in.
-const LABEL_FONT_PX = 160;
+const BLOOM = { strength: 0.5, radius: 0.45, threshold: 0.6 };
 
-const BLOOM = { strength: 0.45, radius: 0.4, threshold: 0.72 };
+const coreTexture = createGlowTexture();
 
-// One unit sphere shared by every node; each mesh is scaled to its radius.
-const sphere = new SphereGeometry(1, 48, 32);
+interface NeuronLook {
+  soma: MeshStandardMaterial;
+  dendrites: MeshStandardMaterial;
+  core: SpriteMaterial;
+  geometries: BufferGeometry[];
+}
 
 export class GraphView {
   private graph: ForceGraph3DInstance<Node, Link> | null = null;
   private colors = new Map<string, string>();
   private neighbors = new Map<string, Set<string>>();
-  private materials = new Map<string, MeshStandardMaterial>();
-  private linkMeshes = new Map<Link, Mesh>();
+  private looks = new Map<string, NeuronLook>();
   private nodesById = new Map<string, Node>();
   private hovered: string | null = null;
   private pendingData: GraphData | null = null;
@@ -104,16 +133,22 @@ export class GraphView {
     })
       .backgroundColor(background)
       .showNavInfo(false)
-      .nodeRelSize(NODE_REL_SIZE)
       .nodeVal((n) => 1 + n.degree)
       .nodeLabel((n) => n.id)
       .nodeThreeObject((n) => this.nodeObject(n))
-      .linkThreeObject((l) => this.linkObject(l))
-      .linkPositionUpdate((obj, { start, end }) => placeHelix(obj, start, end))
-      .linkDirectionalArrowColor(() => LINK_COLOR)
-      .linkDirectionalArrowLength(1.8)
-      .linkDirectionalArrowRelPos(1)
-      .linkDirectionalArrowResolution(16)
+      // Fibres: curved tubes tinted by the neuron they leave from.
+      .linkCurvature(FIBRE_CURVATURE)
+      .linkCurveRotation((l) => hash(`${idOf(l.source)}>${idOf(l.target)}`) * Math.PI * 2)
+      .linkColor((l) => this.fibreColor(l))
+      .linkOpacity(FIBRE_OPACITY)
+      .linkWidth((l) => (this.isLinkHighlighted(l) ? FIBRE_WIDTH * 2.2 : FIBRE_WIDTH))
+      .linkResolution(6)
+      // Pulses: faint signals running from source to target.
+      .linkDirectionalParticles(PULSES_PER_FIBRE)
+      .linkDirectionalParticleSpeed(PULSE_SPEED)
+      .linkDirectionalParticleWidth((l) => (this.isLinkHighlighted(l) ? PULSE_WIDTH * 1.8 : PULSE_WIDTH))
+      .linkDirectionalParticleColor((l) => this.nodeColor(this.nodesById.get(idOf(l.source) ?? '')))
+      .linkDirectionalParticleResolution(8)
       .onNodeHover((n) => this.hover(n))
       .onNodeClick((n) => this.click(n))
       // Lay out synchronously before the first frame, so the graph is
@@ -128,7 +163,6 @@ export class GraphView {
     const pixelRatio = Math.min(window.devicePixelRatio * SUPERSAMPLE, MAX_PIXEL_RATIO);
     renderer.setPixelRatio(pixelRatio);
     renderer.toneMapping = ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
 
     const composer = graph.postProcessingComposer();
     composer.setPixelRatio(pixelRatio);
@@ -146,7 +180,9 @@ export class GraphView {
     // With post-processing the clear colour is treated as linear and then
     // re-encoded to sRGB by OutputPass, which turns the dark background grey.
     // A scene background goes through colour management and stays exact.
-    graph.scene().background = new Color(background);
+    const scene = graph.scene();
+    scene.background = new Color(background);
+    scene.fog = new FogExp2(background, FOG_DENSITY);
 
     this.graph = graph;
   }
@@ -155,7 +191,7 @@ export class GraphView {
   private fit(): void {
     if (!this.needsFit || !this.graph) return;
     this.needsFit = false;
-    this.graph.zoomToFit(600, 60);
+    this.graph.zoomToFit(600, 40);
   }
 
   private draw(): void {
@@ -169,9 +205,8 @@ export class GraphView {
       this.neighborsOf(link.source).add(link.target);
       this.neighborsOf(link.target).add(link.source);
     }
-    for (const material of this.materials.values()) material.dispose();
-    this.materials.clear();
-    this.linkMeshes.clear();
+    for (const look of this.looks.values()) disposeLook(look);
+    this.looks.clear();
 
     const nodes = data.nodes.map((n) => ({ ...n }));
     this.nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -181,51 +216,70 @@ export class GraphView {
       links: data.links.map((l) => ({ source: l.source, target: l.target })),
     });
     // First framing on the warmed-up layout; fit() runs again on engine stop.
-    window.setTimeout(() => this.graph?.zoomToFit(400, 60), FIRST_FIT_DELAY_MS);
+    window.setTimeout(() => this.graph?.zoomToFit(400, 40), FIRST_FIT_DELAY_MS);
   }
 
-  /** A lit sphere sized by degree, with its title floating below it. */
+  /** A neuron: glowing soma, organic dendrites and a dim title below. */
   private nodeObject(node: Node): Group {
-    const radius = Math.cbrt(1 + node.degree) * NODE_REL_SIZE;
-    const material = new MeshStandardMaterial({ roughness: 0.35, metalness: 0.1 });
-    this.materials.set(node.id, material);
-    this.paint(node, material);
+    const radius = Math.min(SOMA_BASE_RADIUS + Math.sqrt(node.degree) * SOMA_DEGREE_RADIUS, SOMA_MAX_RADIUS);
+    const shape = buildNeuron(hash(node.id), radius);
+    const look: NeuronLook = {
+      soma: new MeshStandardMaterial({ roughness: 0.55, metalness: 0 }),
+      dendrites: new MeshStandardMaterial({ roughness: 0.75, metalness: 0 }),
+      core: new SpriteMaterial({ map: coreTexture, blending: AdditiveBlending, depthWrite: false, transparent: true }),
+      geometries: [shape.soma, shape.dendrites],
+    };
+    this.looks.set(node.id, look);
+    this.paint(node, look);
 
-    const ball = new Mesh(sphere, material);
-    ball.scale.setScalar(radius);
+    const core = new Sprite(look.core);
+    core.scale.setScalar(radius * CORE_SCALE);
 
-    const label = new SpriteText(node.title, 2.6, '#c8c8ce');
+    const label = new SpriteText(node.title, LABEL_HEIGHT, LABEL_COLOR);
     label.fontSize = LABEL_FONT_PX;
     label.fontFace = 'Segoe UI, system-ui, sans-serif';
     label.fontWeight = '500';
-    // Draw titles on top of everything so helices never cut through them.
+    // Titles stay on top, readable and unaffected by fog.
     label.material.depthWrite = false;
     label.material.depthTest = false;
+    label.material.fog = false;
     label.renderOrder = 10;
     const texture = label.material.map;
     if (texture && this.graph) texture.anisotropy = this.graph.renderer().capabilities.getMaxAnisotropy();
     label.position.y = -(radius + 3);
 
     const group = new Group();
-    group.add(ball, label);
+    group.add(new Mesh(shape.dendrites, look.dendrites), new Mesh(shape.soma, look.soma), core, label);
     return group;
   }
 
-  /** A double helix; placeHelix positions and sizes it every tick. */
-  private linkObject(link: Link): Mesh {
-    const mesh = new Mesh(helixGeometry(1), [strandMaterial, rungMaterial]);
-    this.linkMeshes.set(link, mesh);
-    return mesh;
+  private paint(node: Node, look: NeuronLook): void {
+    const dimmed = this.hovered !== null && node.id !== this.hovered && !this.neighbors.get(this.hovered)?.has(node.id);
+    const base = new Color(dimmed ? dimColor : this.nodeColor(node));
+    const firing = node.id === this.hovered;
+
+    look.soma.color.copy(base);
+    look.soma.emissive.copy(base);
+    look.soma.emissiveIntensity = dimmed ? 0 : firing ? SOMA_GLOW * 2.2 : SOMA_GLOW;
+
+    look.dendrites.color.copy(base).lerp(DENDRITE_TINT, DENDRITE_SHADE);
+    look.dendrites.emissive.copy(base);
+    look.dendrites.emissiveIntensity = dimmed ? 0 : firing ? 0.35 : 0.08;
+
+    look.core.color.copy(base);
+    look.core.opacity = dimmed ? 0 : firing ? CORE_OPACITY * 2.5 : CORE_OPACITY;
   }
 
-  private paint(node: Node, material: MeshStandardMaterial): void {
-    const dimmed = this.hovered !== null && node.id !== this.hovered && !this.neighbors.get(this.hovered)?.has(node.id);
-    const base = dimmed ? dimColor : node.unresolved ? unresolvedColor : this.colors.get(node.group) ?? rootColor;
-    material.color.set(base);
-    // A little self-illumination keeps colours vivid on the unlit side and
-    // feeds the bloom pass; the hovered node glows more.
-    material.emissive.copy(new Color(base));
-    material.emissiveIntensity = dimmed ? 0 : node.id === this.hovered ? 0.55 : 0.18;
+  private nodeColor(node: Node | undefined): string {
+    if (!node) return rootColor;
+    if (node.unresolved) return unresolvedColor;
+    return this.colors.get(node.group) ?? rootColor;
+  }
+
+  private fibreColor(link: Link): string {
+    if (this.isLinkHighlighted(link)) return '#f4f4f5';
+    const source = this.nodesById.get(idOf(link.source) ?? '');
+    return '#' + new Color(this.nodeColor(source)).lerp(DENDRITE_TINT, FIBRE_SHADE).getHexString();
   }
 
   private assignColors(nodes: GraphNodeData[]): void {
@@ -238,20 +292,22 @@ export class GraphView {
     if (id === this.hovered) return;
     this.hovered = id;
     this.container.style.cursor = node ? 'pointer' : 'grab';
-    for (const [nodeId, material] of this.materials) {
+    for (const [nodeId, look] of this.looks) {
       const target = this.nodesById.get(nodeId);
-      if (target) this.paint(target, material);
+      if (target) this.paint(target, look);
     }
-    for (const [link, mesh] of this.linkMeshes) {
-      const lit = this.isLinkHighlighted(link);
-      mesh.material = lit ? [strandHighlight, rungHighlight] : [strandMaterial, rungMaterial];
-    }
+    // Re-assigning the accessors makes the graph re-evaluate them.
+    const graph = this.graph;
+    graph
+      ?.linkColor(graph.linkColor())
+      .linkWidth(graph.linkWidth())
+      .linkDirectionalParticleWidth(graph.linkDirectionalParticleWidth());
   }
 
   private click(node: Node): void {
     // Fly the camera towards the node, then open it.
     const { x = 0, y = 0, z = 0 } = node;
-    const distance = 80;
+    const distance = 70;
     const ratio = 1 + distance / Math.max(Math.hypot(x, y, z), 1);
     this.graph?.cameraPosition({ x: x * ratio, y: y * ratio, z: z * ratio }, { x, y, z }, 700);
     window.setTimeout(() => this.onOpen(node), 450);
@@ -281,40 +337,38 @@ export class GraphView {
   }
 }
 
-/** Soft ambient fill plus a key and a tinted rim light for depth. */
+/** Dim fill plus a warm key light, so dendrites read as lit tissue. */
 function createLights() {
-  const key = new DirectionalLight(0xffffff, 1.8);
+  const key = new DirectionalLight(0xffe7d6, 1.6);
   key.position.set(1, 1.2, 1);
-  const rim = new DirectionalLight(0x8b7cf6, 0.6);
-  rim.position.set(-1, -0.6, -1);
-  return [new AmbientLight(0xffffff, 0.35), new HemisphereLight(0xdfe3ff, 0x202024, 0.6), key, rim];
+  const fill = new DirectionalLight(0x9fb4ff, 0.45);
+  fill.position.set(-1, -0.4, -0.8);
+  return [new AmbientLight(0xffffff, 0.3), key, fill];
 }
 
-function linkMaterial(color: string, glow: number): MeshStandardMaterial {
-  return new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: glow, roughness: 0.45, metalness: 0.1 });
+/** A white radial gradient, tinted per neuron through the sprite colour. */
+function createGlowTexture(): CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.25, 'rgba(255,255,255,0.5)');
+    gradient.addColorStop(0.6, 'rgba(255,255,255,0.08)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+  }
+  return new CanvasTexture(canvas);
 }
 
-const forward = new Vector3();
-
-/**
- * Stretches a helix mesh between two nodes: centred at the midpoint, its +Z
- * axis towards the target, with as many turns as the length calls for.
- * Returns true so the graph skips its default line placement.
- */
-function placeHelix(obj: Object3D, start: Coords, end: Coords): boolean {
-  const mesh = obj as Mesh;
-  forward.set(end.x - start.x, end.y - start.y, end.z - start.z);
-  const length = forward.length();
-  if (length === 0) return true;
-
-  const turns = turnsFor(length);
-  const geometry = helixGeometry(turns);
-  if (mesh.geometry !== geometry) mesh.geometry = geometry;
-
-  mesh.position.set((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2);
-  mesh.lookAt(end.x, end.y, end.z);
-  mesh.scale.set(1, 1, length / helixLength(turns));
-  return true;
+function disposeLook(look: NeuronLook): void {
+  look.soma.dispose();
+  look.dendrites.dispose();
+  look.core.dispose();
+  look.geometries.forEach((g) => g.dispose());
 }
 
 function idOf(end: Link['source']): string | undefined {
