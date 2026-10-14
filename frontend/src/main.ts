@@ -17,6 +17,7 @@ type ViewName = 'editor' | 'graph';
 
 const SAVE_DELAY_MS = 600;
 const CONTEXT_DELAY_MS = 400;
+const GRAPH_FOCUS_KEY = 'parallelepiped.graphFocus';
 
 class App {
   private vault: VaultInfo | null = null;
@@ -76,8 +77,8 @@ class App {
     byId('rail-notes').addEventListener('click', () => this.showView('editor'));
     byId('rail-graph').addEventListener('click', () => this.showView('graph'));
     byId('open-graph').addEventListener('click', () => this.showView('graph'));
-    byId('rail-search').addEventListener('click', () => this.focusSearch());
     byId('theme-toggle').addEventListener('click', () => toggleTheme());
+    byId('graph-focus').addEventListener('click', () => this.setGraphFocus(!this.graphFocus()));
 
     const title = byId<HTMLInputElement>('note-title');
     title.addEventListener('keydown', (e) => {
@@ -100,6 +101,18 @@ class App {
     });
 
     window.addEventListener('keydown', (e) => {
+      // Graph-only mode: F toggles it, Esc leaves it (not while typing).
+      if (!byId('graph-view').hidden && !e.ctrlKey && !e.metaKey && !e.altKey && !isTyping(e.target)) {
+        if (e.key.toLowerCase() === 'f') {
+          e.preventDefault();
+          this.setGraphFocus(!this.graphFocus());
+          return;
+        }
+        if (e.key === 'Escape' && this.graphFocus()) {
+          this.setGraphFocus(false);
+          return;
+        }
+      }
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
       if (key === 'n') {
@@ -393,8 +406,29 @@ class App {
     byId('graph-view').hidden = view !== 'graph';
     byId('rail-notes').classList.toggle('active', view === 'editor');
     byId('rail-graph').classList.toggle('active', view === 'graph');
+    // Graph-only mode applies to the graph view and is remembered for next time.
+    byId('workspace').classList.toggle('graph-focus', view === 'graph' && this.graphFocus());
     if (view === 'graph') void this.loadGraph();
     else this.graph.hide();
+  }
+
+  private graphFocus(): boolean {
+    try {
+      return localStorage.getItem(GRAPH_FOCUS_KEY) === '1';
+    } catch {
+      return byId('workspace').classList.contains('graph-focus');
+    }
+  }
+
+  /** Shows only the rail and the graph, hiding the explorer and the context column. */
+  private setGraphFocus(on: boolean): void {
+    try {
+      localStorage.setItem(GRAPH_FOCUS_KEY, on ? '1' : '0');
+    } catch {
+      // Without storage the mode still applies until the app closes.
+    }
+    byId('workspace').classList.toggle('graph-focus', on && !byId('graph-view').hidden);
+    byId('graph-focus').title = on ? 'Voltar ao layout completo (F ou Esc)' : 'Mostrar só o grafo (F)';
   }
 
   private async loadGraph(): Promise<void> {
@@ -418,6 +452,10 @@ function covers(changed: string, note: string): boolean {
   const c = changed.toLowerCase();
   const n = note.toLowerCase();
   return c === '' || c === n || n.startsWith(c + '/');
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
 
 function importSummary(r: ImportResult): string {

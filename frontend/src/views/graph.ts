@@ -45,6 +45,8 @@ const Graph3D = ForceGraph3D as unknown as new (element: HTMLElement, config?: C
 // background it washes the whole scene out.
 interface SceneLook {
   background: string;
+  /** Fog strength; light backgrounds wash distant neurons out quickly. */
+  fogScale: number;
   label: string;
   dim: string;
   highlight: string;
@@ -53,8 +55,8 @@ interface SceneLook {
 }
 
 const SCENE_LOOKS: Record<Theme, SceneLook> = {
-  dark: { background: '#1e1e1e', label: '#9a9aa4', dim: '#2c2c32', highlight: '#f4f4f5', dendriteTint: new Color('#2a201c'), bloom: true },
-  light: { background: '#ecebe7', label: '#4a4a52', dim: '#d6d5d0', highlight: '#18181b', dendriteTint: new Color('#3a3631'), bloom: false },
+  dark: { background: '#1e1e1e', fogScale: 0.18, label: '#9a9aa4', dim: '#2c2c32', highlight: '#f4f4f5', dendriteTint: new Color('#2a201c'), bloom: true },
+  light: { background: '#ecebe7', fogScale: 0.06, label: '#4a4a52', dim: '#d6d5d0', highlight: '#18181b', dendriteTint: new Color('#3a3631'), bloom: false },
 };
 
 // Neurons.
@@ -80,10 +82,15 @@ const PULSE_SPEED = 0.004;
 const PULSE_WIDTH = 0.55;
 
 // Exponential fog: distant neurons fade into the background. The density is
-// FOG_SCALE divided by the graph's radius, so a large vault (seen from far
-// away) is not swallowed by fog while a small one still shows depth.
-const FOG_SCALE = 0.18;
+// the theme's fogScale divided by the graph's radius, so a large vault (seen
+// from far away) is not swallowed by fog while a small one still shows depth.
 const FOG_DEFAULT_DENSITY = 0.002;
+
+// The camera frames only linked notes: unlinked ones sit at the edge and
+// would otherwise shrink the connected cluster to a speck.
+const FRAME_PADDING = 40;
+// Reframe after the panel width changes this much (e.g. graph-only mode).
+const REFRAME_WIDTH_CHANGE = 0.2;
 
 // Labels: dim enough to stay under the bloom threshold (colour per theme).
 const LABEL_HEIGHT = 2.4;
@@ -143,6 +150,7 @@ export class GraphView {
   private idleTimer = 0;
   private look: SceneLook = SCENE_LOOKS[currentTheme()];
   private bloomPass: UnrealBloomPass | null = null;
+  private framedWidth = 0;
 
   constructor(
     private readonly container: HTMLElement,
@@ -289,22 +297,34 @@ export class GraphView {
     this.hide();
   }
 
-  /** Frames every node once the layout has settled after new data. */
+  /** Frames the graph once the layout has settled after new data. */
   private fit(): void {
     if (!this.needsFit || !this.graph) return;
     this.needsFit = false;
-    this.wake();
-    this.fitFog();
-    this.graph.zoomToFit(600, 40);
+    this.frame(600);
   }
 
-  /** Scales the fog to the size of the laid-out graph. */
-  private fitFog(): void {
+  /** Points the camera at the linked notes (or all, if none are linked). */
+  private frame(durationMs: number): void {
+    if (!this.graph) return;
+    this.wake();
+    const filter = this.framingFilter();
+    this.fitFog(filter);
+    this.graph.zoomToFit(durationMs, FRAME_PADDING, filter);
+  }
+
+  private framingFilter(): (node: Node) => boolean {
+    const anyLinked = [...this.nodesById.values()].some((n) => n.degree > 0);
+    return anyLinked ? (n) => n.degree > 0 : () => true;
+  }
+
+  /** Scales the fog to the size of the framed part of the graph. */
+  private fitFog(filter: (node: Node) => boolean): void {
     const fog = this.graph?.scene().fog;
-    const box = this.graph?.getGraphBbox();
+    const box = this.graph?.getGraphBbox(filter);
     if (!(fog instanceof FogExp2) || !box) return;
     const radius = Math.max(box.x[1] - box.x[0], box.y[1] - box.y[0], box.z[1] - box.z[0]) / 2;
-    fog.density = radius > 0 ? FOG_SCALE / radius : FOG_DEFAULT_DENSITY;
+    fog.density = radius > 0 ? this.look.fogScale / radius : FOG_DEFAULT_DENSITY;
   }
 
   private draw(): void {
@@ -331,11 +351,7 @@ export class GraphView {
       links: data.links.map((l) => ({ source: l.source, target: l.target })),
     });
     // First framing on the warmed-up layout; fit() runs again on engine stop.
-    window.setTimeout(() => {
-      this.wake();
-      this.fitFog();
-      this.graph?.zoomToFit(400, 40);
-    }, FIRST_FIT_DELAY_MS);
+    window.setTimeout(() => this.frame(400), FIRST_FIT_DELAY_MS);
   }
 
   /** A neuron: glowing soma, organic dendrites and a dim title below. */
@@ -453,8 +469,13 @@ export class GraphView {
 
   private resize(): void {
     if (!this.graph || !this.isVisible()) return;
-    this.graph.width(this.container.clientWidth).height(this.container.clientHeight);
+    const width = this.container.clientWidth;
+    this.graph.width(width).height(this.container.clientHeight);
     this.wake();
+    // A big change (entering or leaving graph-only mode) deserves a reframe;
+    // small window drags keep the user's own zoom.
+    if (this.framedWidth > 0 && Math.abs(width - this.framedWidth) / this.framedWidth > REFRAME_WIDTH_CHANGE) this.frame(400);
+    this.framedWidth = width;
   }
 
   private isVisible(): boolean {

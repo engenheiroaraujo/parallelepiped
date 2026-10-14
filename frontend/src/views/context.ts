@@ -21,6 +21,8 @@ interface MapNode {
 
 const SVG = 'http://www.w3.org/2000/svg';
 const LABEL_CHARS = 16;
+const MAX_MAP_NODES = 9; // per side
+const MAX_LABELLED_NODES = 4; // per side
 
 export class ContextView {
   private readonly map = byId<HTMLElement>('local-map') as unknown as SVGSVGElement;
@@ -128,17 +130,24 @@ export class ContextView {
 
     const children: SVGElement[] = [];
     const place = (nodes: MapNode[], side: -1 | 1) => {
-      const shown = nodes.slice(0, 7);
+      const shown = nodes.slice(0, MAX_MAP_NODES);
+      // With few neighbours the names fit; with many they would overlap, so
+      // they show only on hover.
+      const labelled = shown.length <= MAX_LABELLED_NODES;
       shown.forEach((node, i) => {
         const spread = shown.length === 1 ? 0 : (i / (shown.length - 1) - 0.5) * Math.PI * 0.85;
         const x = cx + side * Math.cos(spread) * (width * 0.36);
         const y = cy + Math.sin(spread) * (height * 0.4);
         children.unshift(svg('line', { x1: cx, y1: cy, x2: x, y2: y, stroke: node.color, 'stroke-opacity': 0.45, 'stroke-width': 1.2 }));
         const group = svg('g', { class: 'node' });
-        group.append(svg('circle', { cx: x, cy: y, r: 6, fill: node.color }));
-        const label = svg('text', { x, y: y + 17, 'text-anchor': 'middle' });
-        label.textContent = truncate(node.title);
-        group.append(label);
+        const tooltip = svg('title', {});
+        tooltip.textContent = node.title;
+        group.append(tooltip, svg('circle', { cx: x, cy: y, r: 6, fill: node.color }));
+        if (labelled) {
+          const label = svg('text', { x, y: y + 17, 'text-anchor': 'middle' });
+          label.textContent = truncate(node.title);
+          group.append(label);
+        }
         group.addEventListener('click', () => (node.path ? this.onOpen(node.path) : this.onFollow(node.title)));
         children.push(group);
       });
