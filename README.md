@@ -6,9 +6,13 @@ busca de texto completo e um **grafo 3D** que você gira com o mouse.
 Um cofre é uma pasta comum: as notas são arquivos `.md` que continuam
 legíveis por qualquer outro editor.
 
+![Grafo 3D: cada nota é um neurônio, colorido pela pasta](docs/images/grafo.webp)
+
+![Uma nota com mini-mapa da vizinhança, backlinks, ligações de saída e tags](docs/images/nota.webp)
+
 ## Requisitos
 
-- Go 1.25+
+- Go 1.26+
 - Node.js 22+ e npm
 - WebView2 (já vem no Windows 10/11)
 - GNU make (opcional, para os atalhos abaixo)
@@ -36,7 +40,8 @@ make dev     # abre o app com hot reload
 |---|---|
 | Ctrl+N | nova nota |
 | Ctrl+G | alterna entre editor e grafo 3D |
-| Ctrl+Shift+F | busca |
+| Ctrl+K ou Ctrl+Shift+F | busca |
+| F / Esc (no grafo) | entra e sai do modo só-grafo |
 | Ctrl+S | salva agora (o salvamento também é automático) |
 | Ctrl+clique em `[[link]]` | abre a nota (ou cria, se não existir) |
 
@@ -46,3 +51,13 @@ clique num nó para abrir a nota.
 ## Arquitetura
 
 Monolito modular em camadas — veja [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Contribuindo
+
+Contribuições são bem-vindas. Leia o [guia de contribuição](CONTRIBUTING.md) e
+o [código de conduta](CODE_OF_CONDUCT.md). Para relatar uma vulnerabilidade,
+siga a [política de segurança](SECURITY.md) — não abra uma issue pública.
+
+## Licença
+
+[MIT](LICENSE) © 2026 Gabriel Alves de Araujo.
