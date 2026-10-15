@@ -9,5 +9,12 @@
   "author": {
     "name": "Gabriel Alves de Araujo",
     "email": "araujong@outlook.com"
+  },
+  "info": {
+    "companyName": "Gabriel Alves de Araujo",
+    "productName": "parallelepiped",
+    "productVersion": "0.1.0",
+    "copyright": "© 2026 Gabriel Alves de Araujo",
+    "comments": ""
   }
 }

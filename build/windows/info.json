@@ -3,10 +3,13 @@
 		"file_version": "{{.Info.ProductVersion}}"
 	},
 	"info": {
-		"0000": {
+		"0416": {
 			"ProductVersion": "{{.Info.ProductVersion}}",
 			"CompanyName": "{{.Info.CompanyName}}",
 			"FileDescription": "{{.Info.ProductName}}",
+			"FileVersion": "{{.Info.ProductVersion}}",
+			"InternalName": "parallelepiped",
+			"OriginalFilename": "parallelepiped.exe",
 			"LegalCopyright": "{{.Info.Copyright}}",
 			"ProductName": "{{.Info.ProductName}}",
 			"Comments": "{{.Info.Comments}}"
